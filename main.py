@@ -31,6 +31,6 @@ elif option == "run":
     with tempfile.NamedTemporaryFile(suffix='.py') as f:
         f.write(inp)
         f.flush()
-        cmd='python3.11 '+os.path.join(OPTIONS_DIR, argv[2])+f'.py {f.file.name}'
+        cmd='python3 '+os.path.join(OPTIONS_DIR, argv[2])+f'.py {f.file.name}'
         os.system(cmd)
 
