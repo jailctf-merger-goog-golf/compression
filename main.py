@@ -24,6 +24,9 @@ if option == "list":
 elif option == "run":
     if len(argv) != 3:
         print_usage_and_exit()
+    if '..' in argv[2]:
+        print('bad')
+        exit(1)
     if not os.path.exists(os.path.join(OPTIONS_DIR, argv[2])+'.py'):
         print('not found')
         exit(1)
