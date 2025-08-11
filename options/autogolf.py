@@ -1,0 +1,1372 @@
+import sys
+from ast import *
+from contextlib import contextmanager, nullcontext
+import os
+import enum
+import keyword
+
+
+original_ast_unparse = unparse
+del unparse
+
+
+# AST UNPARSE PART
+# ======================================================================================================================
+
+
+class ColonStmtDetector(NodeVisitor):
+    def __init__(self):
+        super().__init__()
+        self.has_semicolons = False
+
+    def uses_colon_stmts(self, node):
+        self.has_semicolons = False
+        if isinstance(node, list):
+            for v in node:
+                self.visit(v)
+        else:
+            self.visit(node)
+        return self.has_semicolons
+
+    def visit_For(self, node: For):
+        self.has_semicolons = True
+
+    def visit_If(self, node: If):
+        self.has_semicolons = True
+
+    def visit_While(self, node: While):
+        self.has_semicolons = True
+
+
+# noinspection PyUnresolvedReferences,PyProtectedMember
+simple_enum, IntEnum, auto = enum._simple_enum, enum.IntEnum, enum.auto
+
+_INFSTR = "1e" + repr(sys.float_info.max_10_exp + 1)
+
+
+@simple_enum(IntEnum)
+class Precedence:
+    """Precedence table that originated from python grammar."""
+
+    NAMED_EXPR = auto()  # <target> := <expr1>
+    TUPLE = auto()  # <expr1>, <expr2>
+    YIELD = auto()  # 'yield', 'yield from'
+    TEST = auto()  # 'if'-'else', 'lambda'
+    OR = auto()  # 'or'
+    AND = auto()  # 'and'
+    NOT = auto()  # 'not'
+    CMP = auto()  # '<', '>', '==', '>=', '<=', '!=',
+    # 'in', 'not in', 'is', 'is not'
+    EXPR = auto()
+    BOR = EXPR  # '|'
+    BXOR = auto()  # '^'
+    BAND = auto()  # '&'
+    SHIFT = auto()  # '<<', '>>'
+    ARITH = auto()  # '+', '-'
+    TERM = auto()  # '*', '@', '/', '%', '//'
+    FACTOR = auto()  # unary '+', '-', '~'
+    POWER = auto()  # '**'
+    AWAIT = auto()  # 'await'
+    ATOM = auto()
+
+    def next(self):
+        try:
+            # noinspection PyArgumentList,PyTypeChecker
+            return self.__class__(self + 1)
+        except ValueError:
+            return self
+
+
+_SINGLE_QUOTES = ("'", '"')
+_MULTI_QUOTES = ('"""', "'''")
+_ALL_QUOTES = (*_SINGLE_QUOTES, *_MULTI_QUOTES)
+
+
+class _Unparser(NodeVisitor):
+    """Methods in this class recursively traverse an AST and
+    output source code for the abstract syntax; original formatting
+    is disregarded."""
+
+    def __init__(self, *, _avoid_backslashes=False):
+        self._source: list[str] = []
+        self._precedences = {}
+        self._namedexpr_free_pass = {*()}
+        self._type_ignores = {}
+        self._indent = 0
+        self._avoid_backslashes = _avoid_backslashes
+        self._in_try_star = False
+        self.semicoloning = False
+        self.semicoloning_skip_first = False
+
+    # noinspection PyMethodMayBeStatic
+    def interleave(self, inter, f, seq):
+        """Call f on each item in seq, calling inter() in between."""
+        seq = iter(seq)
+        try:
+            f(next(seq))
+        except StopIteration:
+            pass
+        else:
+            for x in seq:
+                inter()
+                f(x)
+
+    def items_view(self, traverser, items):
+        """Traverse and separate the given *items* with a comma and append it to
+        the buffer. If *items* is a single item sequence, a trailing comma
+        will be added."""
+        for item in items:
+            self.attempt_give_namedexpr_free_pass(item)
+        if len(items) == 1:
+            traverser(items[0])
+            self.write(",")
+        else:
+            self.interleave(lambda: self.write(","), traverser, items)
+
+    def maybe_newline(self):
+        """Adds a newline if it isn't the start of generated source"""
+        if self._source:
+            self.write("\n")
+
+    def fill(self, text=""):
+        """Indent a piece of text and append it, according to the current
+        indentation level"""
+        if self.semicoloning:
+            if self.semicoloning_skip_first:
+                self.semicoloning_skip_first = False
+            else:
+                self.write(";")
+            self.write(text)
+        else:
+            self.maybe_newline()
+            self.write(*(" " * self._indent), text)
+
+    def write(self, *text):
+        """Add new source parts"""
+        self._source.extend(text)
+
+    @contextmanager
+    def buffered(self, buffer=None):
+        if buffer is None:
+            buffer = []
+
+        original_source = self._source
+        self._source = buffer
+        yield buffer
+        self._source = original_source
+
+    @contextmanager
+    def block(self, *, extra=None):
+        """A context manager for preparing the source for blocks. It adds
+        the character':', increases the indentation on enter and decreases
+        the indentation on exit. If *extra* is given, it will be directly
+        appended after the colon character.
+        """
+        self.write(":")
+        if extra:
+            self.write(extra)
+        self._indent += 1
+        yield
+        self._indent -= 1
+
+    @contextmanager
+    def delimit(self, start, end):
+        """A context manager for preparing the source for expressions. It adds
+        *start* to the buffer and enters, after exit it adds *end*."""
+
+        self.write(start)
+        yield
+        self.write(end)
+
+    def delimit_if(self, start, end, condition):
+        if condition:
+            return self.delimit(start, end)
+        else:
+            return nullcontext()
+
+    def require_parens(self, precedence, node):
+        """Shortcut to adding precedence related parens"""
+        return self.delimit_if("(", ")", self.get_precedence(node) > precedence)
+
+    def get_precedence(self, node):
+        return self._precedences.get(node, Precedence.TEST)
+
+    def set_precedence(self, precedence, *nodes):
+        for node in nodes:
+            self._precedences[node] = precedence
+
+    # noinspection PyMethodMayBeStatic
+    def get_raw_docstring(self, node):
+        """If a docstring node is found in the body of the *node* parameter,
+        return that docstring node, None otherwise.
+
+        Logic mirrored from ``_PyAST_GetDocString``."""
+        if not isinstance(
+                node, (AsyncFunctionDef, FunctionDef, ClassDef, Module)
+        ) or len(node.body) < 1:
+            return None
+        node = node.body[0]
+        if not isinstance(node, Expr):
+            return None
+        node = node.value
+        if isinstance(node, Constant) and isinstance(node.value, str):
+            return node
+
+    def get_type_comment(self, node):
+        comment = self._type_ignores.get(node.lineno) or node.type_comment
+        if comment is not None:
+            return f" # type: {comment}"
+
+    def traverse(self, node):
+        if isinstance(node, list):
+            for item in node:
+                self.traverse(item)
+        else:
+            super().visit(node)
+
+    # Note: as visit() resets the output text, do NOT rely on
+    # NodeVisitor.generic_visit to handle any nodes (as it calls back in to
+    # the subclass visit() method, which resets self._source to an empty list)
+    def visit(self, node):
+        """Outputs a source code string that, if converted back to an ast
+        (using ast.parse) will generate an AST equivalent to *node*"""
+        self._source = []
+        self.traverse(node)
+
+        source = self._source
+        rbrackets = "])}"
+        lbrackets = "[({"
+        brackets = lbrackets + rbrackets
+        alpha = "qwertyuiopasdfghjklzxcvbnm"
+        digits = "0123456789"
+        L = len(source)
+
+        # remove unnecessary spacing
+        for i in range(L):
+            if source[i] == ' ' and 0 < i < L-1:
+                before, after = source[i-1], source[i+1]
+                assert isinstance(before, str) and isinstance(after, str)
+                if 0 == len(before) or 0 == len(after):
+                    continue
+
+                # fix things like "[0for r in g]"
+                if before.isnumeric() and keyword.iskeyword(after):
+                    if after[0] == "F":  # prevent floating point errors
+                        continue
+                    if after[0] == "o" and before == "0":  # prevent octal errors
+                        continue
+                    source[i] = ''
+
+                # fix things like "[r[x:X]for r in g]" and "[r for*r,in g]"
+                if before in rbrackets+"," and keyword.iskeyword(after):
+                    source[i] = ''
+
+                # fix things like "and[r]" and "[r for*r,in g]"
+                if keyword.iskeyword(before) and after in lbrackets+"*":
+                    source[i] = ''
+
+                # fix quotes stuff
+                if keyword.iskeyword(before) and after[0] in "'\"":
+                    source[i] = ''
+                if before[-1] in "\"'" and keyword.iskeyword(after):
+                    source[i] = ''
+
+        return "".join(source)
+
+    def _write_docstring_and_traverse_body(self, node):
+        if docstring := self.get_raw_docstring(node):
+            self._write_docstring(docstring)
+            self.traverse(node.body[1:])
+        else:
+            self.traverse(node.body)
+
+    def visit_Module(self, node):
+        self._type_ignores = {
+            ignore.lineno: f"ignore{ignore.tag}"
+            for ignore in node.type_ignores
+        }
+        self._write_docstring_and_traverse_body(node)
+        self._type_ignores.clear()
+
+    def visit_FunctionType(self, node):
+        with self.delimit("(", ")"):
+            self.interleave(
+                lambda: self.write(", "), self.traverse, node.argtypes
+            )
+
+        self.write(" -> ")
+        self.traverse(node.returns)
+
+    def visit_Expr(self, node):
+        self.fill()
+        self.set_precedence(Precedence.YIELD, node.value)
+        self.traverse(node.value)
+
+    def attempt_give_namedexpr_free_pass(self, nexpr: expr):
+        if not isinstance(nexpr, NamedExpr):
+            return
+        self._namedexpr_free_pass.add(nexpr)
+
+    def visit_NamedExpr(self, node):  # walrus operator
+        if node in self._namedexpr_free_pass:
+            self.set_precedence(Precedence.TEST, node.target, node.value)
+            self.traverse(node.target)
+            self.write(":=")
+            self.traverse(node.value)
+        else:
+            with self.require_parens(Precedence.NAMED_EXPR, node):
+                self.set_precedence(Precedence.TEST, node.target, node.value)
+                self.traverse(node.target)
+                self.write(":=")
+                self.traverse(node.value)
+
+    def visit_Import(self, node):
+        self.fill("import")
+        self.write(" ")
+        self.interleave(lambda: self.write(","), self.traverse, node.names)
+
+    def visit_ImportFrom(self, node):
+        self.fill("from")
+        self.write(" ")
+        self.write("." * (node.level or 0))
+        if node.module:
+            self.write(node.module)
+        self.write(" ", "import", " ")
+        self.interleave(lambda: self.write(", "), self.traverse, node.names)
+
+    def visit_Assign(self, node):
+        self.fill()
+        for target in node.targets:
+            self.set_precedence(Precedence.TUPLE, target)
+            self.traverse(target)
+            self.write("=")
+        self.traverse(node.value)
+        if type_comment := self.get_type_comment(node):
+            self.write(type_comment)
+
+    def visit_AugAssign(self, node):
+        self.fill()
+        self.traverse(node.target)
+        self.write(self.binop[node.op.__class__.__name__] + "=")
+        self.traverse(node.value)
+
+    def visit_AnnAssign(self, node):
+        self.fill()
+        with self.delimit_if("(", ")", not node.simple and isinstance(node.target, Name)):
+            self.traverse(node.target)
+        self.write(": ")
+        self.traverse(node.annotation)
+        if node.value:
+            self.write(" = ")
+            self.traverse(node.value)
+
+    def visit_Return(self, node):
+        self.fill("return")
+        if node.value:
+            self.write(" ")
+            self.traverse(node.value)
+
+    def visit_Pass(self, node):
+        self.fill("pass")
+
+    def visit_Break(self, node):
+        self.fill("break")
+
+    def visit_Continue(self, node):
+        self.fill("continue")
+
+    def visit_Delete(self, node):
+        self.fill("del ")
+        self.interleave(lambda: self.write(", "), self.traverse, node.targets)
+
+    def visit_Assert(self, node):
+        self.fill("assert ")
+        self.traverse(node.test)
+        if node.msg:
+            self.write(", ")
+            self.traverse(node.msg)
+
+    def visit_Global(self, node):
+        self.fill("global ")
+        self.interleave(lambda: self.write(", "), self.write, node.names)
+
+    def visit_Nonlocal(self, node):
+        self.fill("nonlocal ")
+        self.interleave(lambda: self.write(", "), self.write, node.names)
+
+    def visit_Await(self, node):
+        with self.require_parens(Precedence.AWAIT, node):
+            self.write("await")
+            if node.value:
+                self.write(" ")
+                self.set_precedence(Precedence.ATOM, node.value)
+                self.traverse(node.value)
+
+    def visit_Yield(self, node):
+        with self.require_parens(Precedence.YIELD, node):
+            self.write("yield")
+            if node.value:
+                self.write(" ")
+                self.set_precedence(Precedence.ATOM, node.value)
+                self.traverse(node.value)
+
+    def visit_YieldFrom(self, node):
+        with self.require_parens(Precedence.YIELD, node):
+            self.write("yield from ")
+            if not node.value:
+                raise ValueError("Node can't be used without a value attribute.")
+            self.set_precedence(Precedence.ATOM, node.value)
+            self.traverse(node.value)
+
+    def visit_Raise(self, node):
+        self.fill("raise")
+        if not node.exc:
+            if node.cause:
+                raise ValueError(f"Node can't use cause without an exception.")
+            return
+        self.write(" ")
+        self.traverse(node.exc)
+        if node.cause:
+            self.write(" from ")
+            self.traverse(node.cause)
+
+    def do_visit_try(self, node):
+        self.fill("try")
+        with self.block():
+            self.traverse(node.body)
+        for ex in node.handlers:
+            self.traverse(ex)
+        if node.orelse:
+            self.fill("else")
+            with self.block():
+                self.traverse(node.orelse)
+        if node.finalbody:
+            self.fill("finally")
+            with self.block():
+                self.traverse(node.finalbody)
+
+    def visit_Try(self, node):
+        prev_in_try_star = self._in_try_star
+        try:
+            self._in_try_star = False
+            self.do_visit_try(node)
+        finally:
+            self._in_try_star = prev_in_try_star
+
+    def visit_TryStar(self, node):
+        prev_in_try_star = self._in_try_star
+        try:
+            self._in_try_star = True
+            self.do_visit_try(node)
+        finally:
+            self._in_try_star = prev_in_try_star
+
+    def visit_ExceptHandler(self, node):
+        self.fill("except*" if self._in_try_star else "except")
+        if node.type:
+            self.write(" ")
+            self.traverse(node.type)
+        if node.name:
+            self.write(" as ")
+            self.write(node.name)
+        with self.block():
+            self.traverse(node.body)
+
+    def visit_ClassDef(self, node):
+        self.maybe_newline()
+        for deco in node.decorator_list:
+            self.fill("@")
+            self.traverse(deco)
+        self.fill("class " + node.name)
+        with self.delimit_if("(", ")", condition=node.bases or node.keywords):
+            comma = False
+            for e in node.bases:
+                if comma:
+                    self.write(", ")
+                else:
+                    comma = True
+                self.traverse(e)
+            for e in node.keywords:
+                if comma:
+                    self.write(", ")
+                else:
+                    comma = True
+                self.traverse(e)
+
+        with self.block():
+            self._write_docstring_and_traverse_body(node)
+
+    def visit_FunctionDef(self, node):
+        self._function_helper(node, "def")
+
+    def visit_AsyncFunctionDef(self, node):
+        self._function_helper(node, "async def")
+
+    def _function_helper(self, node, fill_suffix):
+        for deco in node.decorator_list:
+            self.fill("@")
+            self.traverse(deco)
+        def_str = fill_suffix + " " + node.name
+        self.fill(def_str)
+        with self.delimit("(", ")"):
+            self.traverse(node.args)
+        if node.returns:
+            self.write("->")
+            self.traverse(node.returns)
+        can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
+        self.semicoloning = not can_semicoloning
+        self.semicoloning_skip_first = True
+        with self.block(extra=self.get_type_comment(node)):
+            self._write_docstring_and_traverse_body(node)
+        self.semicoloning = False
+
+    def visit_For(self, node):
+        self._for_helper("for ", node)
+
+    def visit_AsyncFor(self, node):
+        self._for_helper("async for ", node)
+
+    def _for_helper(self, fill, node):
+        self.fill(fill)
+        self.set_precedence(Precedence.TUPLE, node.target)
+        self.traverse(node.target)
+        self.write(" ", "in", " ")
+        self.traverse(node.iter)
+        can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
+        self.semicoloning = not can_semicoloning
+        self.semicoloning_skip_first = True
+        with self.block(extra=self.get_type_comment(node)):
+            self.traverse(node.body)
+        self.semicoloning = False
+        self.semicoloning = can_semicoloning
+        self.semicoloning_skip_first = True
+        if node.orelse:
+            self.fill("else")
+            with self.block():
+                self.traverse(node.orelse)
+        self.semicoloning = False
+
+    def visit_If(self, node):
+        self.fill("if ")
+        self.traverse(node.test)
+        can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
+        self.semicoloning = not can_semicoloning
+        self.semicoloning_skip_first = True
+        with self.block():
+            self.traverse(node.body)
+        self.semicoloning = False
+        # collapse nested ifs into equivalent elifs.
+        while node.orelse and len(node.orelse) == 1 and isinstance(node.orelse[0], If):
+            node = node.orelse[0]
+            self.fill("elif ")
+            # noinspection PyUnresolvedReferences
+            self.traverse(node.test)
+            can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
+            self.semicoloning = not can_semicoloning
+            self.semicoloning_skip_first = True
+            with self.block():
+                # noinspection PyUnresolvedReferences
+                self.traverse(node.body)
+            self.semicoloning = False
+        # final else
+        if node.orelse:
+            self.fill("else")
+            can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.orelse)
+            self.semicoloning = not can_semicoloning
+            self.semicoloning_skip_first = True
+            with self.block():
+                self.traverse(node.orelse)
+            self.semicoloning = False
+
+    def visit_While(self, node):
+        self.fill("while ")
+        self.traverse(node.test)
+        with self.block():
+            self.traverse(node.body)
+        if node.orelse:
+            self.fill("else")
+            with self.block():
+                self.traverse(node.orelse)
+
+    def visit_With(self, node):
+        self.fill("with ")
+        self.interleave(lambda: self.write(", "), self.traverse, node.items)
+        with self.block(extra=self.get_type_comment(node)):
+            self.traverse(node.body)
+
+    def visit_AsyncWith(self, node):
+        self.fill("async with ")
+        self.interleave(lambda: self.write(", "), self.traverse, node.items)
+        with self.block(extra=self.get_type_comment(node)):
+            self.traverse(node.body)
+
+    # noinspection PyMethodMayBeStatic
+    def _str_literal_helper(
+            self, string, *, quote_types=_ALL_QUOTES, escape_special_whitespace=False
+    ):
+        """Helper for writing string literals, minimizing escapes.
+        Returns the tuple (string literal to write, possible quote types).
+        """
+
+        def escape_char(c):
+            # \n and \t are non-printable, but we only escape them if
+            # escape_special_whitespace is True
+            if not escape_special_whitespace and c in "\n\t":
+                return c
+            # Always escape backslashes and other non-printable characters
+            if c == "\\" or not c.isprintable():
+                return c.encode("unicode_escape").decode("ascii")
+            return c
+
+        escaped_string = "".join(map(escape_char, string))
+        possible_quotes = quote_types
+        if "\n" in escaped_string:
+            possible_quotes = [q for q in possible_quotes if q in _MULTI_QUOTES]
+        possible_quotes = [q for q in possible_quotes if q not in escaped_string]
+        if not possible_quotes:
+            # If there aren't any possible_quotes, fallback to using repr
+            # on the original string. Try to use a quote from quote_types,
+            # e.g., so that we use triple quotes for docstrings.
+            string = repr(string)
+            quote = next((q for q in quote_types if string[0] in q), string[0])
+            return string[1:-1], [quote]
+        if escaped_string:
+            # Sort so that we prefer '''"''' over """\""""
+            possible_quotes.sort(key=lambda q: q[0] == escaped_string[-1])
+            # If we're using triple quotes and we'd need to escape a final
+            # quote, escape it
+            if possible_quotes[0][0] == escaped_string[-1]:
+                assert len(possible_quotes[0]) == 3
+                escaped_string = escaped_string[:-1] + "\\" + escaped_string[-1]
+        return escaped_string, possible_quotes
+
+    def _write_str_avoiding_backslashes(self, string, *, quote_types=_ALL_QUOTES):
+        """Write string literal value with a best effort attempt to avoid backslashes."""
+        string, quote_types = self._str_literal_helper(string, quote_types=quote_types)
+        quote_type = quote_types[0]
+        self.write(f"{quote_type}{string}{quote_type}")
+
+    def visit_JoinedStr(self, node):
+        self.write("f")
+        if self._avoid_backslashes:
+            with self.buffered() as buffer:
+                self._write_fstring_inner(node)
+            return self._write_str_avoiding_backslashes("".join(buffer))
+
+        # If we don't need to avoid backslashes globally (i.e., we only need
+        # to avoid them inside FormattedValues), it's cosmetically preferred
+        # to use escaped whitespace. That is, it's preferred to use backslashes
+        # for cases like: f"{x}\n". To accomplish this, we keep track of what
+        # in our buffer corresponds to FormattedValues and what corresponds to
+        # Constant parts of the f-string, and allow escapes accordingly.
+        fstring_parts = []
+        for value in node.values:
+            with self.buffered() as buffer:
+                # noinspection PyTypeChecker
+                self._write_fstring_inner(value)
+            fstring_parts.append(
+                ("".join(buffer), isinstance(value, Constant))
+            )
+
+        new_fstring_parts = []
+        quote_types = list(_ALL_QUOTES)
+        fallback_to_repr = False
+        for value, is_constant in fstring_parts:
+            value, new_quote_types = self._str_literal_helper(
+                value,
+                quote_types=quote_types,
+                escape_special_whitespace=is_constant,
+            )
+            new_fstring_parts.append(value)
+            if set(new_quote_types).isdisjoint(quote_types):
+                fallback_to_repr = True
+                break
+            quote_types = new_quote_types
+
+        if fallback_to_repr:
+            # If we weren't able to find a quote type that works for all parts
+            # of the JoinedStr, fallback to using repr and triple single quotes.
+            quote_types = ["'''"]
+            new_fstring_parts.clear()
+            for value, is_constant in fstring_parts:
+                value = repr('"' + value)  # force repr to use single quotes
+                expected_prefix = "'\""
+                assert value.startswith(expected_prefix), repr(value)
+                new_fstring_parts.append(value[len(expected_prefix):-1])
+
+        value = "".join(new_fstring_parts)
+        quote_type = quote_types[0]
+        self.write(f"{quote_type}{value}{quote_type}")
+
+    def _write_fstring_inner(self, node):
+        if isinstance(node, JoinedStr):
+            # for both the f-string itself, and format_spec
+            for value in node.values:
+                # noinspection PyTypeChecker
+                self._write_fstring_inner(value)
+        elif isinstance(node, Constant) and isinstance(node.value, str):
+            value = node.value.replace("{", "{{").replace("}", "}}")
+            self.write(value)
+        elif isinstance(node, FormattedValue):
+            self.visit_FormattedValue(node)
+        else:
+            raise ValueError(f"Unexpected node inside JoinedStr, {node!r}")
+
+    def visit_FormattedValue(self, node):
+        def unparse_inner(inner):
+            unparser = type(self)(_avoid_backslashes=True)
+            unparser.set_precedence(Precedence.TEST.next(), inner)
+            return unparser.visit(inner)
+
+        with self.delimit("{", "}"):
+            expr_formatted = unparse_inner(node.value)
+            if "\\" in expr_formatted:
+                raise ValueError(
+                    "Unable to avoid backslash in f-string expression part"
+                )
+            if expr_formatted.startswith("{"):
+                # Separate pair of opening brackets as "{ {"
+                self.write(" ")
+            self.write(expr_formatted)
+            if node.conversion != -1:
+                self.write(f"!{chr(node.conversion)}")
+            if node.format_spec:
+                self.write(":")
+                # noinspection PyTypeChecker
+                self._write_fstring_inner(node.format_spec)
+
+    def visit_Name(self, node):
+        self.write(node.id)
+
+    def _write_docstring(self, node):
+        self.fill()
+        if node.kind == "u":
+            self.write("u")
+        self._write_str_avoiding_backslashes(node.value, quote_types=_MULTI_QUOTES)
+
+    def _write_constant(self, value):
+        if isinstance(value, (float, complex)):
+            # Substitute overflowing decimal literal for AST infinities,
+            # and inf - inf for NaNs.
+            self.write(
+                repr(value)
+                .replace("inf", _INFSTR)
+                .replace("nan", f"({_INFSTR}-{_INFSTR})")
+            )
+        elif self._avoid_backslashes and isinstance(value, str):
+            self._write_str_avoiding_backslashes(value)
+        else:
+            if isinstance(value, bytes):
+                if all(b < 128 for b in value):
+                    least_quote_byte = b"'"[0] if value.count(b'"') > value.count(b"'") else b'"'[0]
+                    total = 'b' + chr(least_quote_byte)
+                    for byte in value:
+                        if byte == 0:
+                            total += "\\0"
+                        elif byte == 0xa:
+                            total += '\\n'
+                        elif byte == 0xd:
+                            total += '\\r'
+                        elif byte == least_quote_byte:
+                            total += f"\\{least_quote_byte:c}"
+                        elif byte == 0x5c:
+                            total += "\\\\"
+                        else:
+                            total += chr(byte)
+                    self.write(total + chr(least_quote_byte))
+                    return
+            if isinstance(value, str):
+                if all(ord(b) < 128 for b in value):
+                    least_quote_byte = "'" if value.count('"') > value.count("'") else '"'
+                    is_r_string = value.count("\\") > 1 and value[-1] != "\\"
+                    is_r_string = is_r_string and all(c not in value for c in "\x00\x0a\x0d")
+                    total = ('r' if is_r_string else "") + least_quote_byte
+                    if is_r_string:
+                        for char in value:
+                            assert char != '\x00'
+                            if char == least_quote_byte:
+                                total += f"\\{least_quote_byte:c}"
+                            elif char == '\\':
+                                total += "\\"
+                            else:
+                                total += char
+                    else:
+                        for i, char in enumerate(value):
+                            if char == 0:
+                                total += "\\0"
+                            elif char == 0xa:
+                                total += '\\n'
+                            elif char == 0xd:
+                                total += '\\r'
+                            elif char == least_quote_byte:
+                                total += f"\\{least_quote_byte:c}"
+                            elif char == '\\':
+                                # ughhhh this is so annoying
+                                if i != len(value) - 1 and value[i+1] in r"\"'abfnrtvoxNuU0123456789":
+                                    total += "\\\\"
+                                else:
+                                    total += "\\"
+                            else:
+                                total += char
+                    self.write(total + least_quote_byte)
+                    return
+            self.write(repr(value))
+
+    def visit_Constant(self, node):
+        value = node.value
+        if isinstance(value, tuple):
+            with self.delimit("(", ")"):
+                self.items_view(self._write_constant, value)
+        elif value is ...:
+            self.write("...")
+        else:
+            # we are not living in python 2 any more
+            # if node.kind == "u":
+            #     self.write("u")
+            self._write_constant(node.value)
+
+    def visit_List(self, node):
+        with self.delimit("[", "]"):
+            for n2 in node.elts:
+                self.attempt_give_namedexpr_free_pass(n2)
+            self.interleave(lambda: self.write(","), self.traverse, node.elts)
+
+    def visit_ListComp(self, node):
+        with self.delimit("[", "]"):
+            self.attempt_give_namedexpr_free_pass(node.elt)
+            self.traverse(node.elt)
+            for gen in node.generators:
+                self.traverse(gen)
+
+    def visit_GeneratorExp(self, node):
+        if self._source[-1] != "(":
+            with self.delimit("(", ")"):
+                self.traverse(node.elt)
+                for gen in node.generators:
+                    self.traverse(gen)
+        else:
+            self.traverse(node.elt)
+            for gen in node.generators:
+                self.traverse(gen)
+
+    def visit_SetComp(self, node):
+        with self.delimit("{", "}"):
+            self.traverse(node.elt)
+            for gen in node.generators:
+                self.traverse(gen)
+
+    def visit_DictComp(self, node):
+        with self.delimit("{", "}"):
+            self.traverse(node.key)
+            self.write(":")
+            self.traverse(node.value)
+            for gen in node.generators:
+                self.traverse(gen)
+
+    def visit_comprehension(self, node):
+        if node.is_async:
+            self.write(" ", "async for", " ")
+        else:
+            self.write(" ", "for", " ")
+        self.set_precedence(Precedence.TUPLE, node.target)
+        self.traverse(node.target)
+        self.write(" ", "in", " ")
+        self.set_precedence(Precedence.TEST.next(), node.iter, *node.ifs)
+        self.traverse(node.iter)
+        for if_clause in node.ifs:
+            self.write(" ", "if", " ")
+            self.traverse(if_clause)
+
+    def visit_IfExp(self, node):
+        with self.require_parens(Precedence.TEST, node):
+            self.set_precedence(Precedence.TEST.next(), node.body, node.test)
+            self.traverse(node.body)
+            self.write(" ", "if", " ")
+            self.traverse(node.test)
+            self.write(" ", "else", " ")
+            self.set_precedence(Precedence.TEST, node.orelse)
+            self.traverse(node.orelse)
+
+    def visit_Set(self, node):
+        if node.elts:
+            with self.delimit("{", "}"):
+                self.interleave(lambda: self.write(","), self.traverse, node.elts)
+        else:
+            # `{}` would be interpreted as a dictionary literal, and
+            # `set` might be shadowed. Thus:
+            self.write('{*()}')
+
+    def visit_Dict(self, node):
+        def write_key_value_pair(k, v):
+            self.traverse(k)
+            self.write(": ")
+            self.traverse(v)
+
+        def write_item(item):
+            k, v = item
+            if k is None:
+                # for dictionary unpacking operator in dicts {**{'y': 2}}
+                # see PEP 448 for details
+                self.write("**")
+                self.set_precedence(Precedence.EXPR, v)
+                self.traverse(v)
+            else:
+                write_key_value_pair(k, v)
+
+        with self.delimit("{", "}"):
+            self.interleave(
+                lambda: self.write(", "), write_item, zip(node.keys, node.values)
+            )
+
+    def visit_Tuple(self, node):
+        with self.delimit_if(
+                "(",
+                ")",
+                len(node.elts) == 0 or self.get_precedence(node) > Precedence.TUPLE
+        ):
+            self.items_view(self.traverse, node.elts)
+
+    unop = {"Invert": "~", "Not": "not", "UAdd": "+", "USub": "-"}
+    unop_precedence = {
+        "not": Precedence.NOT,
+        "~": Precedence.FACTOR,
+        "+": Precedence.FACTOR,
+        "-": Precedence.FACTOR,
+    }
+
+    def visit_UnaryOp(self, node):
+        operator_text = self.unop[node.op.__class__.__name__]
+        operator_precedence = self.unop_precedence[operator_text]
+        with self.require_parens(operator_precedence, node):
+            self.write(operator_text)
+            # factor prefixes (+, -, ~) shouldn't be separated
+            # from the value they belong, (e.g: +1 instead of + 1)
+            if operator_precedence is not Precedence.FACTOR:
+                self.write(" ")
+            self.set_precedence(operator_precedence, node.operand)
+            self.traverse(node.operand)
+
+    binop = {
+        "Add": "+",
+        "Sub": "-",
+        "Mult": "*",
+        "MatMult": "@",
+        "Div": "/",
+        "Mod": "%",
+        "LShift": "<<",
+        "RShift": ">>",
+        "BitOr": "|",
+        "BitXor": "^",
+        "BitAnd": "&",
+        "FloorDiv": "//",
+        "Pow": "**",
+    }
+
+    binop_precedence = {
+        "+": Precedence.ARITH,
+        "-": Precedence.ARITH,
+        "*": Precedence.TERM,
+        "@": Precedence.TERM,
+        "/": Precedence.TERM,
+        "%": Precedence.TERM,
+        "<<": Precedence.SHIFT,
+        ">>": Precedence.SHIFT,
+        "|": Precedence.BOR,
+        "^": Precedence.BXOR,
+        "&": Precedence.BAND,
+        "//": Precedence.TERM,
+        "**": Precedence.POWER,
+    }
+
+    binop_rassoc = frozenset(("**",))
+
+    def visit_BinOp(self, node):
+        operator_text = self.binop[node.op.__class__.__name__]
+        operator_precedence = self.binop_precedence[operator_text]
+        with self.require_parens(operator_precedence, node):
+            if operator_text in self.binop_rassoc:
+                left_precedence = operator_precedence.next()
+                right_precedence = operator_precedence
+            else:
+                left_precedence = operator_precedence
+                right_precedence = operator_precedence.next()
+
+            self.set_precedence(left_precedence, node.left)
+            self.traverse(node.left)
+            self.write(f"{operator_text}")
+            self.set_precedence(right_precedence, node.right)
+            self.traverse(node.right)
+
+    cmpops = {
+        "Eq": "==",
+        "NotEq": "!=",
+        "Lt": "<",
+        "LtE": "<=",
+        "Gt": ">",
+        "GtE": ">=",
+        "Is": "is",
+        "IsNot": "is not",
+        "In": "in",
+        "NotIn": "not in",
+    }
+
+    def visit_Compare(self, node):
+        with self.require_parens(Precedence.CMP, node):
+            self.set_precedence(Precedence.CMP.next(), node.left, *node.comparators)
+            self.traverse(node.left)
+            for o, e in zip(node.ops, node.comparators):
+                op_text = self.cmpops[o.__class__.__name__]
+                if op_text in ("is", "is not", "in", "not in"):
+                    self.write(" ", op_text, " ")
+                else:
+                    self.write(op_text)
+                self.traverse(e)
+
+    boolops = {"And": "and", "Or": "or"}
+    boolop_precedence = {"and": Precedence.AND, "or": Precedence.OR}
+
+    def visit_BoolOp(self, node):
+        operator_text = self.boolops[node.op.__class__.__name__]
+        operator_precedence = self.boolop_precedence[operator_text]
+
+        def increasing_level_traverse(node2):
+            nonlocal operator_precedence
+            operator_precedence = operator_precedence.next()
+            self.set_precedence(operator_precedence, node2)
+            self.traverse(node2)
+
+        with self.require_parens(operator_precedence, node):
+            s = f"{operator_text}"
+            self.interleave(lambda: self.write(" ", s, " "), increasing_level_traverse, node.values)
+
+    def visit_Attribute(self, node):
+        self.set_precedence(Precedence.ATOM, node.value)
+        self.traverse(node.value)
+        # Special case: 3.__abs__() is a syntax error, so if node.value
+        # is an integer literal then we need to either parenthesize
+        # it or add an extra space to get 3 .__abs__().
+        if isinstance(node.value, Constant) and isinstance(node.value.value, int):
+            self.write(" ")
+        self.write(".")
+        self.write(node.attr)
+
+    def visit_Call(self, node):
+        self.set_precedence(Precedence.ATOM, node.func)
+        self.traverse(node.func)
+        with self.delimit("(", ")"):
+            comma = False
+            for e in node.args:
+                if comma:
+                    self.write(",")
+                else:
+                    comma = True
+                self.attempt_give_namedexpr_free_pass(e)
+                self.traverse(e)
+            for e in node.keywords:
+                if comma:
+                    self.write(",")
+                else:
+                    comma = True
+                self.traverse(e)
+
+    def visit_Subscript(self, node):
+        def is_non_empty_tuple(slice_value):
+            return (
+                    isinstance(slice_value, Tuple)
+                    and slice_value.elts
+            )
+
+        self.set_precedence(Precedence.ATOM, node.value)
+        self.traverse(node.value)
+        with self.delimit("[", "]"):
+            # noinspection PyTypeChecker
+            if is_non_empty_tuple(node.slice):
+                # parentheses can be omitted if the tuple isn't empty
+                # noinspection PyUnresolvedReferences
+                self.items_view(self.traverse, node.slice.elts)
+            else:
+                self.attempt_give_namedexpr_free_pass(node.slice)
+                self.traverse(node.slice)
+
+    def visit_Starred(self, node):
+        self.write("*")
+        self.set_precedence(Precedence.TUPLE, node.value)
+        self.traverse(node.value)
+
+    def visit_Ellipsis(self, node):
+        self.write("...")
+
+    def visit_Slice(self, node):
+        if node.lower:
+            self.traverse(node.lower)
+        self.write(":")
+        if node.upper:
+            self.traverse(node.upper)
+        if node.step:
+            self.write(":")
+            self.traverse(node.step)
+
+    def visit_Match(self, node):
+        self.fill("match ")
+        self.traverse(node.subject)
+        with self.block():
+            for case in node.cases:
+                self.traverse(case)
+
+    def visit_arg(self, node):
+        self.write(node.arg)
+        if node.annotation:
+            self.write(": ")
+            self.traverse(node.annotation)
+
+    def visit_arguments(self, node):
+        first = True
+        # normal arguments
+        all_args = node.posonlyargs + node.args
+        # noinspection PyTypeChecker
+        defaults = [None] * (len(all_args) - len(node.defaults)) + node.defaults
+        for index, elements in enumerate(zip(all_args, defaults), 1):
+            a, d = elements
+            if first:
+                first = False
+            else:
+                self.write(",")
+            self.traverse(a)
+            if d:
+                self.write("=")
+                self.traverse(d)
+            if index == len(node.posonlyargs):
+                self.write(",/")
+
+        # varargs, or bare '*' if no varargs but keyword-only arguments present
+        if node.vararg or node.kwonlyargs:
+            if first:
+                first = False
+            else:
+                self.write(",")
+            self.write("*")
+            if node.vararg:
+                self.write(node.vararg.arg)
+                if node.vararg.annotation:
+                    self.write(":")
+                    self.traverse(node.vararg.annotation)
+
+        # keyword-only arguments
+        if node.kwonlyargs:
+            for a, d in zip(node.kwonlyargs, node.kw_defaults):
+                self.write(", ")
+                self.traverse(a)
+                if d:
+                    self.write("=")
+                    self.traverse(d)
+
+        # kwargs
+        if node.kwarg:
+            if first:
+                # noinspection PyUnusedLocal
+                first = False
+            else:
+                self.write(", ")
+            self.write("**" + node.kwarg.arg)
+            if node.kwarg.annotation:
+                self.write(": ")
+                self.traverse(node.kwarg.annotation)
+
+    def visit_keyword(self, node):
+        if node.arg is None:
+            self.write("**")
+        else:
+            self.write(node.arg)
+            self.write("=")
+        self.traverse(node.value)
+
+    def visit_Lambda(self, node):
+        with self.require_parens(Precedence.TEST, node):
+            self.write("lambda")
+            with self.buffered() as buffer:
+                self.traverse(node.args)
+            if buffer:
+                self.write(" ", *buffer)
+            self.write(":")
+            self.set_precedence(Precedence.TEST, node.body)
+            self.traverse(node.body)
+
+    def visit_alias(self, node):
+        self.write(node.name)
+        if node.asname:
+            self.write(" as " + node.asname)
+
+    def visit_withitem(self, node):
+        self.traverse(node.context_expr)
+        if node.optional_vars:
+            self.write(" as ")
+            self.traverse(node.optional_vars)
+
+    def visit_match_case(self, node):
+        self.fill("case ")
+        self.traverse(node.pattern)
+        if node.guard:
+            self.write(" if ")
+            self.traverse(node.guard)
+        with self.block():
+            self.traverse(node.body)
+
+    def visit_MatchValue(self, node):
+        self.traverse(node.value)
+
+    def visit_MatchSingleton(self, node):
+        self._write_constant(node.value)
+
+    def visit_MatchSequence(self, node):
+        with self.delimit("[", "]"):
+            self.interleave(
+                lambda: self.write(", "), self.traverse, node.patterns
+            )
+
+    def visit_MatchStar(self, node):
+        name = node.name
+        if name is None:
+            name = "_"
+        self.write(f"*{name}")
+
+    def visit_MatchMapping(self, node):
+        def write_key_pattern_pair(pair):
+            k, p = pair
+            self.traverse(k)
+            self.write(": ")
+            self.traverse(p)
+
+        with self.delimit("{", "}"):
+            keys = node.keys
+            self.interleave(
+                lambda: self.write(", "),
+                write_key_pattern_pair,
+                zip(keys, node.patterns, strict=True),
+            )
+            rest = node.rest
+            if rest is not None:
+                if keys:
+                    self.write(", ")
+                self.write(f"**{rest}")
+
+    def visit_MatchClass(self, node):
+        self.set_precedence(Precedence.ATOM, node.cls)
+        self.traverse(node.cls)
+        with self.delimit("(", ")"):
+            patterns = node.patterns
+            self.interleave(
+                lambda: self.write(", "), self.traverse, patterns
+            )
+            attrs = node.kwd_attrs
+            if attrs:
+                def write_attr_pattern(pair):
+                    attr, pattern2 = pair
+                    self.write(f"{attr}=")
+                    self.traverse(pattern2)
+
+                if patterns:
+                    self.write(", ")
+                self.interleave(
+                    lambda: self.write(", "),
+                    write_attr_pattern,
+                    zip(attrs, node.kwd_patterns, strict=True),
+                )
+
+    def visit_MatchAs(self, node):
+        name = node.name
+        pattern_expr = node.pattern
+        if name is None:
+            self.write("_")
+        elif pattern_expr is None:
+            self.write(node.name)
+        else:
+            with self.require_parens(Precedence.TEST, node):
+                self.set_precedence(Precedence.BOR, pattern_expr)
+                self.traverse(pattern_expr)
+                self.write(f" as {node.name}")
+
+    def visit_MatchOr(self, node):
+        with self.require_parens(Precedence.BOR, node):
+            self.set_precedence(Precedence.BOR.next(), *node.patterns)
+            self.interleave(lambda: self.write(" | "), self.traverse, node.patterns)
+
+
+def custom_unparse(ast_obj):
+    unparser = _Unparser()
+    return unparser.visit(ast_obj)
+
+
+# AUTOGOLF PART
+# ======================================================================================================================
+
+def main():
+    TEST_EXPORT_PATH = r"D:\Downloads\export-1754881534"
+
+    task_paths = [os.path.join(TEST_EXPORT_PATH, fname) for fname in os.listdir(TEST_EXPORT_PATH)]
+
+    task_contents = {}
+    for task_path in task_paths:
+        n = int(os.path.basename(task_path).removesuffix('.py').removeprefix('task'), 10)
+        with open(task_path, 'rb') as f:
+            data = f.read()
+            if len(data) == 0:
+                continue
+            if data.startswith(b"#coding:l1"):  # i just cant deal with this rn
+                continue
+            try:
+                parse(data)
+            except (SyntaxError, TypeError, ValueError, IndentationError):
+                print(f"Failed to parse task {n}. Skipping")
+            task_contents[n] = data
+
+    # filter tasks here for debugging
+    # task_contents = {n: task_contents[n] for n in task_contents if n in [45]}
+
+    print(f"Loaded {len(task_contents)} task solutions")
+
+    length_fail = 0
+    shorter_success = 0
+
+    for n in task_contents:
+        original_parse = parse(task_contents[n])
+        custom_unparsed = custom_unparse(original_parse)
+        try:
+            second_parse = parse(custom_unparsed)
+        except (SyntaxError, TypeError, ValueError, IndentationError) as e:
+            print(f'Parse fail on task {n}')
+            raise e
+        try:
+            second_unparse = original_ast_unparse(second_parse).split("\n")
+            og_unparse_lines = original_ast_unparse(original_parse).split("\n")
+            for su_line in second_unparse:
+                ogu_line = og_unparse_lines.pop(0)
+                if su_line != ogu_line:
+                    print(original_ast_unparse(second_parse))
+                    print(original_ast_unparse(original_parse))
+                    raise ValueError(f"not the same line:\nCustom: {su_line}\nOG:     {ogu_line}")
+            if len(og_unparse_lines):
+                raise ValueError("different line count")
+        except (SyntaxError, TypeError, ValueError, IndentationError) as e:
+            print(f'Parse equality fail on task {n}')
+            raise e
+        if len(custom_unparsed) > len(task_contents[n]):
+            length_fail += 1
+            print(f"New length is longer for task {n}")
+            print(f"========== task {n:03d} ==========")
+            print(task_contents[n].decode('l1'))
+            print(f'----------------------------------')
+            print(custom_unparsed)
+            print(f'----------------------------------')
+        if len(custom_unparsed) < len(task_contents[n]):
+            shorter_success += 1
+            print(f"Shorter success on task {n}")
+
+    print(f'Success rate: {len(task_contents)-length_fail}/{len(task_contents)}')
+
+    # other tests
+    assert custom_unparse(parse('[z:=(2,2)]')) == "[z:=(2,2)]"
+    assert custom_unparse(parse('[(z:=2),2]')) == "[z:=2,2]"
+
+
+if __name__ == '__main__':
+    main()
