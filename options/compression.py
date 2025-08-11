@@ -42,17 +42,18 @@ def make_code(compressed: bytes, add_wbits: bool, least_quote: int, most_quote: 
     
     return new_code
 
-def get_compressed(code: str | bytes, filename=None, max_brute=10_000, use_tqdm=True):
+def get_compressed(code: str | bytes, filename=None, max_brute=10_000, use_tqdm=True, check_syntax=True):
     code = code.strip()
     
     if isinstance(code, str):
         code = code.encode("utf-8")
     
-    try:
-        compile(code, "<string>", "exec")
-    except SyntaxError as e:
-        e.add_note("! **********\nYour code has a syntax error, fix it.\n! **********")
-        raise
+    if check_syntax:
+        try:
+            compile(code, "<string>", "exec")
+        except SyntaxError as e:
+            e.add_note("! **********\nYour code has a syntax error, fix it.\n! **********")
+            raise
     
     possible = [
         (zlib.compress(code), False),
