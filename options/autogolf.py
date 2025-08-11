@@ -581,12 +581,20 @@ class _Unparser(NodeVisitor):
     def visit_While(self, node):
         self.fill("while ")
         self.traverse(node.test)
+        can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
+        self.semicoloning = not can_semicoloning
+        self.semicoloning_skip_first = True
         with self.block():
             self.traverse(node.body)
+        self.semicoloning = False
         if node.orelse:
             self.fill("else")
+            can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.orelse)
+            self.semicoloning = not can_semicoloning
+            self.semicoloning_skip_first = True
             with self.block():
                 self.traverse(node.orelse)
+            self.semicoloning = False
 
     def visit_With(self, node):
         self.fill("with ")
@@ -1301,6 +1309,8 @@ def custom_unparse(ast_obj):
 
 def main():
     TEST_EXPORT_PATH = r"D:\Downloads\export-1754881534"
+    PRINT_SHORTER = False  # usually you want this on
+    PRINT_LONGER = True  # for debugging and development mostly
 
     task_paths = [os.path.join(TEST_EXPORT_PATH, fname) for fname in os.listdir(TEST_EXPORT_PATH)]
 
@@ -1349,17 +1359,22 @@ def main():
         except (SyntaxError, TypeError, ValueError, IndentationError) as e:
             print(f'Parse equality fail on task {n}')
             raise e
-        if len(custom_unparsed) > len(task_contents[n]):
-            length_fail += 1
-            print(f"New length is longer for task {n}")
-            print(f"========== task {n:03d} ==========")
-            print(task_contents[n].decode('l1'))
-            print(f'----------------------------------')
-            print(custom_unparsed)
-            print(f'----------------------------------')
-        if len(custom_unparsed) < len(task_contents[n]):
-            shorter_success += 1
-            print(f"Shorter success on task {n}")
+        if PRINT_LONGER:
+            if len(custom_unparsed) > len(task_contents[n]):
+                length_fail += 1
+                print(f"New length is longer for task {n} by {len(custom_unparsed)-len(task_contents[n])} bytes")
+                print(f"========== task {n:03d} ==========")
+                print(task_contents[n].decode('l1'))
+                print(f'-------------- new ---------------')
+                print(custom_unparsed)
+                print(f'----------------------------------')
+        if PRINT_SHORTER:
+            if len(custom_unparsed) < len(task_contents[n]):
+                shorter_success += 1
+                print(f"Shorter success on task {n} by {len(task_contents[n])-len(custom_unparsed)} bytes")
+                print(f"======== task {n:03d} new ========")
+                print(custom_unparsed)
+                print('-----------------------------------')
 
     print(f'Success rate: {len(task_contents)-length_fail}/{len(task_contents)}')
 
