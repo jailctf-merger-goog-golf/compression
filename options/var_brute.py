@@ -1,4 +1,4 @@
-from .compression import get_compressed
+from compression import get_compressed
 from tqdm import trange
 import random
 import re
@@ -52,7 +52,7 @@ def p(g):
  return[[max(max([g[l:m]for g in g[c:d]]))for l,m in zip(X,X[1:])]for c,d in zip(Y,Y[1:])]
 """
 
-    bruted, compressed = do_brute(code, 100)
+    bruted, compressed = do_brute(code, 1000)
 
     print("=" * 50)
     print(f"Best code | {len(bruted)}b => {len(compressed)}b\n{bruted}\n\n{compressed.hex()}")
