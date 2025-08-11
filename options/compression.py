@@ -42,21 +42,23 @@ def make_code(compressed: bytes, add_wbits: bool, least_quote: int, most_quote: 
     
     return new_code
 
-def get_compressed(code, filename=None):
+def get_compressed(code: str | bytes, filename=None, max_brute=10_000, use_tqdm=True, check_syntax=True):
     code = code.strip()
     
-    try:
-        compile(code, "<string>", "exec")
-    except SyntaxError:
-        print("Your code has a syntax error, fix it.", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return
+    if isinstance(code, str):
+        code = code.encode("utf-8")
+    
+    if check_syntax:
+        try:
+            compile(code, "<string>", "exec")
+        except SyntaxError as e:
+            e.add_note("! **********\nYour code has a syntax error, fix it.\n! **********")
+            raise
     
     possible = [
         (zlib.compress(code), False),
         (zlib.compress(code, wbits=-15), True),
-        *[(zopfli_compress(code, numiterations=iters, blocksplittinglast=bs)[2:-4], True) for iters in trange(1_000, 10_000, 1_000) for bs in range(2)]
+        *[(zopfli_compress(code, numiterations=iters)[2:-4], True) for iters in (trange if use_tqdm else range)(1_000, max_brute, 1_000)]
     ]
 
     best = None
@@ -67,6 +69,8 @@ def get_compressed(code, filename=None):
         cur_code = make_code(compressed, add_wbits, least_quote, most_quote)
         if best is None or len(cur_code) < len(best):
             best = cur_code
+    
+    assert best is not None, "Unable to find best?"
 
     orig_len = len(code)
     new_len = len(best)
@@ -76,17 +80,5 @@ def get_compressed(code, filename=None):
     if filename is not None:
         with open(filename, "wb") as f:
             f.write(best)
-
-    print(f"Success! {orig_len}b => {new_len}b", file=sys.stderr)
+    
     return best
-
-
-def main():
-    with open(sys.argv[1], 'rb') as f:
-        inp = f.read()
-        print(get_compressed(inp).hex())
-
-
-if __name__ == '__main__':
-    main()
-
