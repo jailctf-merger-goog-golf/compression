@@ -340,6 +340,7 @@ class _Unparser(NodeVisitor):
             self.set_precedence(Precedence.TUPLE, target)
             self.traverse(target)
             self.write("=")
+        self.set_precedence(Precedence.TUPLE, node.value)
         self.traverse(node.value)
         if type_comment := self.get_type_comment(node):
             self.write(type_comment)
@@ -1041,6 +1042,8 @@ class _Unparser(NodeVisitor):
             nonlocal operator_precedence
             operator_precedence = operator_precedence.next()
             self.set_precedence(operator_precedence, node2)
+            if isinstance(node2, BoolOp) and isinstance(node2.op, And):
+                self.set_precedence(Precedence.TEST, node2)
             self.traverse(node2)
 
         with self.require_parens(operator_precedence, node):
@@ -1308,7 +1311,7 @@ def custom_unparse(ast_obj):
 # ======================================================================================================================
 
 def main():
-    TEST_EXPORT_PATH = r"D:\Downloads\export-1754881534"
+    TEST_EXPORT_PATH = r"D:\Downloads\export-1754897838"
     PRINT_SHORTER = False  # usually you want this on
     PRINT_LONGER = True  # for debugging and development mostly
 
@@ -1359,8 +1362,15 @@ def main():
         except (SyntaxError, TypeError, ValueError, IndentationError) as e:
             print(f'Parse equality fail on task {n}')
             raise e
-        if PRINT_LONGER:
-            if len(custom_unparsed) > len(task_contents[n]):
+        if len(custom_unparsed) < len(task_contents[n]):
+            if PRINT_SHORTER:
+                shorter_success += 1
+                print(f"Shorter success on task {n} by {len(task_contents[n])-len(custom_unparsed)} bytes")
+                print(f"======== task {n:03d} new ========")
+                print(custom_unparsed)
+                print('-----------------------------------')
+        elif len(custom_unparsed) > len(task_contents[n]):
+            if PRINT_LONGER:
                 length_fail += 1
                 print(f"New length is longer for task {n} by {len(custom_unparsed)-len(task_contents[n])} bytes")
                 print(f"========== task {n:03d} ==========")
@@ -1368,13 +1378,6 @@ def main():
                 print(f'-------------- new ---------------')
                 print(custom_unparsed)
                 print(f'----------------------------------')
-        if PRINT_SHORTER:
-            if len(custom_unparsed) < len(task_contents[n]):
-                shorter_success += 1
-                print(f"Shorter success on task {n} by {len(task_contents[n])-len(custom_unparsed)} bytes")
-                print(f"======== task {n:03d} new ========")
-                print(custom_unparsed)
-                print('-----------------------------------')
 
     print(f'Success rate: {len(task_contents)-length_fail}/{len(task_contents)}')
 
