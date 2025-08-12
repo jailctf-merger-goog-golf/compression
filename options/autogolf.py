@@ -282,7 +282,7 @@ class _Unparser(NodeVisitor):
                     source[i] = ''
 
                 # fix things like "and[r]" and "[r for*r,in g]" and "while-1<v:"
-                if keyword.iskeyword(before) and after in lbrackets+"*-":
+                if keyword.iskeyword(before) and after in lbrackets+"*-~":
                     source[i] = ''
 
                 # fix quotes stuff
@@ -375,16 +375,18 @@ class _Unparser(NodeVisitor):
         self.fill()
         self.traverse(node.target)
         self.write(self.binop[node.op.__class__.__name__] + "=")
+        if isinstance(node.value, Tuple):
+            self.attempt_forgo_parens_tuples(node.value)
         self.traverse(node.value)
 
     def visit_AnnAssign(self, node):
         self.fill()
         with self.delimit_if("(", ")", not node.simple and isinstance(node.target, Name)):
             self.traverse(node.target)
-        self.write(": ")
+        self.write(":")
         self.traverse(node.annotation)
         if node.value:
-            self.write(" = ")
+            self.write("=")
             self.traverse(node.value)
 
     def visit_Return(self, node):
@@ -570,10 +572,12 @@ class _Unparser(NodeVisitor):
         with self.block(extra=self.get_type_comment(node)):
             self.traverse(node.body)
         self.semicoloning = False
-        self.semicoloning = can_semicoloning
-        self.semicoloning_skip_first = True
+        # else block below
+        can_semicoloning = not ColonStmtDetector().uses_colon_stmts(node.orelse)
         if node.orelse:
             self.fill("else")
+            self.semicoloning = can_semicoloning
+            self.semicoloning_skip_first = True
             with self.block():
                 self.traverse(node.orelse)
         self.semicoloning = False
@@ -1422,7 +1426,7 @@ def golfed_unparse_unsafe(ast_obj: AST):
 def main():
     """run some tests. you will need to change the test export path folder or input it manually"""
 
-    TEST_EXPORT_DIR_PATH = r"D:\Downloads\export-1754979744"
+    TEST_EXPORT_DIR_PATH = r"D:\Downloads\export-1755040230"
     while not os.path.isdir(TEST_EXPORT_DIR_PATH):
         print("Export dir path not found. Enter > ", end="")
         TEST_EXPORT_DIR_PATH = input()
@@ -1463,7 +1467,7 @@ def main():
                 print(f"Failed to parse task {n}. Skipping")
 
     # filter tasks here for debugging
-    # task_contents = {n: task_contents[n] for n in task_contents if n in [68]}
+    # task_contents = {n: task_contents[n] for n in task_contents if n in [169]}
 
     print(f"Loaded {len(task_contents)} task solutions")
 
