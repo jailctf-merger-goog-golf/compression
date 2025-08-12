@@ -38,6 +38,9 @@ class ColonStmtDetector(NodeVisitor):
     def visit_While(self, node: While):
         self.has_semicolons = True
 
+    def visit_FunctionDef(self, node: FunctionDef):
+        self.has_semicolons = True
+
 
 # noinspection PyUnresolvedReferences,PyProtectedMember
 simple_enum, IntEnum, auto = enum._simple_enum, enum.IntEnum, enum.auto
@@ -92,7 +95,8 @@ class _Unparser(NodeVisitor):
         self._source: list[str] = []
         self._precedences = {}
         self._namedexpr_free_pass = {*()}
-        self._forgo_parenthesis = {*()}  # tuples, genexprs
+        self._forgo_parenthesis_genexprs = {*()}  # genexprs
+        self._forgo_parenthesis_tuples = {*()}  # tuples
         self._type_ignores = {}
         self._indent = 0
         self._avoid_backslashes = _avoid_backslashes
@@ -130,18 +134,18 @@ class _Unparser(NodeVisitor):
         if self._source:
             self.write("\n")
 
-    def fill(self, text=""):
+    def fill(self, text="", *texts):
         """Indent a piece of text and append it, according to the current
         indentation level"""
-        if self.semicoloning:
+        if self.semicoloning and self._indent > 0:
             if self.semicoloning_skip_first:
                 self.semicoloning_skip_first = False
             else:
                 self.write(";")
-            self.write(text)
+            self.write(text, *texts)
         else:
             self.maybe_newline()
-            self.write(*(" " * self._indent), text)
+            self.write(*(" " * self._indent), text, *texts)
 
     def write(self, *text):
         """Add new source parts"""
@@ -221,8 +225,19 @@ class _Unparser(NodeVisitor):
 
     def traverse(self, node):
         if isinstance(node, list):
-            for item in node:
-                self.traverse(item)
+            if all(isinstance(item, stmt) for item in node):
+                give_semicolon_pass = False
+                for item in node:
+                    if give_semicolon_pass:
+                        can_semicoloning = ColonStmtDetector().uses_colon_stmts(item)
+                        self.semicoloning = not can_semicoloning
+                        self.semicoloning_skip_first = False
+                    self.traverse(item)
+                    self.semicoloning = False
+                    give_semicolon_pass = not ColonStmtDetector().uses_colon_stmts(item)
+            else:
+                for item in node:
+                    self.traverse(item)
         else:
             super().visit(node)
 
@@ -263,8 +278,8 @@ class _Unparser(NodeVisitor):
                 if before in rbrackets+"," and keyword.iskeyword(after):
                     source[i] = ''
 
-                # fix things like "and[r]" and "[r for*r,in g]"
-                if keyword.iskeyword(before) and after in lbrackets+"*":
+                # fix things like "and[r]" and "[r for*r,in g]" and "while-1<v:"
+                if keyword.iskeyword(before) and after in lbrackets+"*-":
                     source[i] = ''
 
                 # fix quotes stuff
@@ -309,8 +324,11 @@ class _Unparser(NodeVisitor):
             return
         self._namedexpr_free_pass.add(nexpr)
 
-    def attempt_forgo_parens(self, expr_: expr):
-        self._forgo_parenthesis.add(expr_)
+    def attempt_forgo_parens_genexprs(self, expr_: expr):
+        self._forgo_parenthesis_genexprs.add(expr_)
+
+    def attempt_forgo_parens_tuples(self, expr_: expr):
+        self._forgo_parenthesis_tuples.add(expr_)
 
     def visit_NamedExpr(self, node):  # walrus operator
         if node in self._namedexpr_free_pass:
@@ -475,8 +493,12 @@ class _Unparser(NodeVisitor):
         if node.name:
             self.write(" as ")
             self.write(node.name)
+        can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
+        self.semicoloning = not can_semicoloning
+        self.semicoloning_skip_first = True
         with self.block():
             self.traverse(node.body)
+        self.semicoloning = False
 
     def visit_ClassDef(self, node):
         self.maybe_newline()
@@ -519,8 +541,7 @@ class _Unparser(NodeVisitor):
         if node.returns:
             self.write("->")
             self.traverse(node.returns)
-        can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
-        self.semicoloning = not can_semicoloning
+        self.semicoloning = not ColonStmtDetector().uses_colon_stmts(node.body)
         self.semicoloning_skip_first = True
         with self.block(extra=self.get_type_comment(node)):
             self._write_docstring_and_traverse_body(node)
@@ -537,9 +558,11 @@ class _Unparser(NodeVisitor):
         self.set_precedence(Precedence.TUPLE, node.target)
         self.traverse(node.target)
         self.write(" ", "in", " ")
+        if isinstance(node.iter, Tuple):
+            self.attempt_forgo_parens_tuples(node.iter)
         self.traverse(node.iter)
-        can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
-        self.semicoloning = not can_semicoloning
+        can_semicoloning = not ColonStmtDetector().uses_colon_stmts(node.body)
+        self.semicoloning = can_semicoloning
         self.semicoloning_skip_first = True
         with self.block(extra=self.get_type_comment(node)):
             self.traverse(node.body)
@@ -553,7 +576,7 @@ class _Unparser(NodeVisitor):
         self.semicoloning = False
 
     def visit_If(self, node):
-        self.fill("if ")
+        self.fill("if", " ")
         self.traverse(node.test)
         can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
         self.semicoloning = not can_semicoloning
@@ -564,7 +587,7 @@ class _Unparser(NodeVisitor):
         # collapse nested ifs into equivalent elifs.
         while node.orelse and len(node.orelse) == 1 and isinstance(node.orelse[0], If):
             node = node.orelse[0]
-            self.fill("elif ")
+            self.fill("elif", " ")
             # noinspection PyUnresolvedReferences
             self.traverse(node.test)
             can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
@@ -585,7 +608,7 @@ class _Unparser(NodeVisitor):
             self.semicoloning = False
 
     def visit_While(self, node):
-        self.fill("while ")
+        self.fill("while", " ")
         self.traverse(node.test)
         can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
         self.semicoloning = not can_semicoloning
@@ -603,14 +626,14 @@ class _Unparser(NodeVisitor):
             self.semicoloning = False
 
     def visit_With(self, node):
-        self.fill("with ")
-        self.interleave(lambda: self.write(", "), self.traverse, node.items)
+        self.fill("with", " ")
+        self.interleave(lambda: self.write(","), self.traverse, node.items)
         with self.block(extra=self.get_type_comment(node)):
             self.traverse(node.body)
 
     def visit_AsyncWith(self, node):
-        self.fill("async with ")
-        self.interleave(lambda: self.write(", "), self.traverse, node.items)
+        self.fill("async with", " ")
+        self.interleave(lambda: self.write(","), self.traverse, node.items)
         with self.block(extra=self.get_type_comment(node)):
             self.traverse(node.body)
 
@@ -660,8 +683,11 @@ class _Unparser(NodeVisitor):
         quote_type = quote_types[0]
         self.write(f"{quote_type}{string}{quote_type}")
 
-    def visit_JoinedStr(self, node):
-        self.write("f")
+    def visit_JoinedStr(self, node, is_rf_string=False):
+        if is_rf_string:
+            self.write("rf")
+        else:
+            self.write("f")
         if self._avoid_backslashes:
             with self.buffered() as buffer:
                 self._write_fstring_inner(node)
@@ -686,12 +712,12 @@ class _Unparser(NodeVisitor):
         quote_types = list(_ALL_QUOTES)
         fallback_to_repr = False
         for value, is_constant in fstring_parts:
-            value, new_quote_types = self._str_literal_helper(
+            new_value, new_quote_types = self._str_literal_helper(
                 value,
                 quote_types=quote_types,
                 escape_special_whitespace=is_constant,
             )
-            new_fstring_parts.append(value)
+            new_fstring_parts.append(new_value)
             if set(new_quote_types).isdisjoint(quote_types):
                 fallback_to_repr = True
                 break
@@ -754,8 +780,9 @@ class _Unparser(NodeVisitor):
 
     def _write_docstring(self, node):
         self.fill()
-        if node.kind == "u":
-            self.write("u")
+        # we are not living in python2 any more
+        # if node.kind == "u":
+        #     self.write("u")
         self._write_str_avoiding_backslashes(node.value, quote_types=_MULTI_QUOTES)
 
     def _write_constant(self, value):
@@ -792,7 +819,16 @@ class _Unparser(NodeVisitor):
             if isinstance(value, str):
                 if all(ord(b) < 128 for b in value):
                     least_quote_byte = "'" if value.count('"') > value.count("'") else '"'
-                    is_r_string = value.count("\\") > 1 and value[-1] != "\\"
+                    bs_count = 0
+                    doing_backslash_now = False
+                    for char in value:
+                        if doing_backslash_now:
+                            if char in r"\"'abfnrtvoxNuU0123456789":
+                                bs_count += 1
+                            doing_backslash_now = False
+                        if char == "\\":
+                            doing_backslash_now = True
+                    is_r_string = bs_count > 1 and value[-1] != "\\"
                     is_r_string = is_r_string and all(c not in value for c in "\x00\x0a\x0d")
                     total = ('r' if is_r_string else "") + least_quote_byte
                     if is_r_string:
@@ -853,7 +889,7 @@ class _Unparser(NodeVisitor):
                 self.traverse(gen)
 
     def visit_GeneratorExp(self, node):
-        if node in self._forgo_parenthesis:
+        if node in self._forgo_parenthesis_genexprs:
             self.traverse(node.elt)
             for gen in node.generators:
                 self.traverse(gen)
@@ -913,7 +949,7 @@ class _Unparser(NodeVisitor):
     def visit_Dict(self, node):
         def write_key_value_pair(k, v):
             self.traverse(k)
-            self.write(": ")
+            self.write(":")
             self.traverse(v)
 
         def write_item(item):
@@ -929,15 +965,13 @@ class _Unparser(NodeVisitor):
 
         with self.delimit("{", "}"):
             self.interleave(
-                lambda: self.write(", "), write_item, zip(node.keys, node.values)
+                lambda: self.write(","), write_item, zip(node.keys, node.values)
             )
 
     def visit_Tuple(self, node):
-        with self.delimit_if(
-                "(",
-                ")",
-                len(node.elts) == 0 or self.get_precedence(node) > Precedence.TUPLE
-        ):
+        cond = (len(node.elts) == 0 or self.get_precedence(node) > Precedence.TUPLE)
+        cond = cond and node not in self._forgo_parenthesis_tuples
+        with self.delimit_if("(", ")", cond):
             self.items_view(self.traverse, node.elts)
 
     unop = {"Invert": "~", "Not": "not", "UAdd": "+", "USub": "-"}
@@ -1078,7 +1112,7 @@ class _Unparser(NodeVisitor):
                     comma = True
                 self.attempt_give_namedexpr_free_pass(e)
                 if len(node.args) == 1:
-                    self.attempt_forgo_parens(e)
+                    self.attempt_forgo_parens_genexprs(e)
                 self.traverse(e)
             for e in node.keywords:
                 if comma:
@@ -1318,7 +1352,7 @@ def custom_unparse(ast_obj):
 # ======================================================================================================================
 
 def main():
-    TEST_EXPORT_PATH = r"D:\Downloads\export-1754897838"
+    TEST_EXPORT_PATH = r"D:\Downloads\export-1754979744"
     PRINT_SHORTER = False  # usually you want this on
     PRINT_LONGER = True  # for debugging and development mostly
 
@@ -1335,6 +1369,7 @@ def main():
                 new = data.decode('l1').removeprefix('#coding:l1\nimport zlib\nexec(zlib.decompress(bytes(')
                 new = new.removesuffix(",'l1'),-9))")
                 new = new[1:-1]
+                # scuffed asf !
                 new = new.replace('\\\\', '\\\\')
                 new = new.replace("\\0", '\x00')
                 new = new.replace("\\n", '\x0a')
@@ -1355,7 +1390,7 @@ def main():
                 print(f"Failed to parse task {n}. Skipping")
 
     # filter tasks here for debugging
-    # task_contents = {n: task_contents[n] for n in task_contents if n in [10]}
+    task_contents = {n: task_contents[n] for n in task_contents if n in [68]}
 
     print(f"Loaded {len(task_contents)} task solutions")
 
