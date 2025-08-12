@@ -639,11 +639,12 @@ class _Unparser(NodeVisitor):
 
     # noinspection PyMethodMayBeStatic
     def _str_literal_helper(
-            self, string, *, quote_types=_ALL_QUOTES, escape_special_whitespace=False
+            self, string, *, quote_types=_ALL_QUOTES, escape_special_whitespace=False, dont_care_backslashes=False
     ):
         """Helper for writing string literals, minimizing escapes.
         Returns the tuple (string literal to write, possible quote types).
         """
+        # dont_care_backslashes requires it to be constant inside of rfstring
 
         def escape_char(c):
             # \n and \t are non-printable, but we only escape them if
@@ -652,6 +653,8 @@ class _Unparser(NodeVisitor):
                 return c
             # Always escape backslashes and other non-printable characters
             if c == "\\" or not c.isprintable():
+                if c == "\\" and dont_care_backslashes:
+                    return '\\'
                 return c.encode("unicode_escape").decode("ascii")
             return c
 
@@ -683,7 +686,42 @@ class _Unparser(NodeVisitor):
         quote_type = quote_types[0]
         self.write(f"{quote_type}{string}{quote_type}")
 
-    def visit_JoinedStr(self, node, is_rf_string=False):
+    def visit_JoinedStr(self, node):
+        # If we don't need to avoid backslashes globally (i.e., we only need
+        # to avoid them inside FormattedValues), it's cosmetically preferred
+        # to use escaped whitespace. That is, it's preferred to use backslashes
+        # for cases like: f"{x}\n". To accomplish this, we keep track of what
+        # in our buffer corresponds to FormattedValues and what corresponds to
+        # Constant parts of the f-string, and allow escapes accordingly.
+        fstring_parts = []
+        for value in node.values:
+            with self.buffered() as buffer:
+                # noinspection PyTypeChecker
+                self._write_fstring_inner(value)
+            fstring_parts.append(
+                ("".join(buffer), isinstance(value, Constant))
+            )
+
+        new_fstring_parts = []
+        total_backslashes_increased = 0
+        uses_backslash_required_chars = False
+        # ^ not perfectly accurate btw (quotes being backslashed) but should be good enough
+        quote_types = list(_ALL_QUOTES)
+        for value, is_constant in fstring_parts:
+            new_value, new_quote_types = self._str_literal_helper(
+                value,
+                quote_types=quote_types,
+                escape_special_whitespace=is_constant,
+            )
+            if is_constant:
+                uses_backslash_required_chars |= any(c in new_value for c in "\x00\x0a\x0d")
+                total_backslashes_increased += new_value.count("\\") - value.count("\\")
+            new_fstring_parts.append(new_value)
+            quote_types = new_quote_types
+
+        # use rf string
+        is_rf_string = total_backslashes_increased > 1 and not uses_backslash_required_chars
+
         if is_rf_string:
             self.write("rf")
         else:
@@ -716,6 +754,7 @@ class _Unparser(NodeVisitor):
                 value,
                 quote_types=quote_types,
                 escape_special_whitespace=is_constant,
+                dont_care_backslashes=is_rf_string and is_constant
             )
             new_fstring_parts.append(new_value)
             if set(new_quote_types).isdisjoint(quote_types):
@@ -1390,7 +1429,7 @@ def main():
                 print(f"Failed to parse task {n}. Skipping")
 
     # filter tasks here for debugging
-    task_contents = {n: task_contents[n] for n in task_contents if n in [68]}
+    # task_contents = {n: task_contents[n] for n in task_contents if n in [68]}
 
     print(f"Loaded {len(task_contents)} task solutions")
 
@@ -1411,8 +1450,11 @@ def main():
             for su_line in second_unparse:
                 ogu_line = og_unparse_lines.pop(0)
                 if su_line != ogu_line:
+                    print('===')
                     print(original_ast_unparse(second_parse))
+                    print('===')
                     print(original_ast_unparse(original_parse))
+                    print('===')
                     raise ValueError(f"not the same line:\nCustom: {su_line}\nOG:     {ogu_line}")
             if len(og_unparse_lines):
                 raise ValueError("different line count")
