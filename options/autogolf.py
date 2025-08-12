@@ -2,6 +2,7 @@ import sys
 from ast import *
 from contextlib import contextmanager, nullcontext
 import os
+import zlib
 import enum
 import keyword
 
@@ -91,6 +92,7 @@ class _Unparser(NodeVisitor):
         self._source: list[str] = []
         self._precedences = {}
         self._namedexpr_free_pass = {*()}
+        self._forgo_parenthesis = {*()}  # tuples, genexprs
         self._type_ignores = {}
         self._indent = 0
         self._avoid_backslashes = _avoid_backslashes
@@ -306,6 +308,9 @@ class _Unparser(NodeVisitor):
         if not isinstance(nexpr, NamedExpr):
             return
         self._namedexpr_free_pass.add(nexpr)
+
+    def attempt_forgo_parens(self, expr_: expr):
+        self._forgo_parenthesis.add(expr_)
 
     def visit_NamedExpr(self, node):  # walrus operator
         if node in self._namedexpr_free_pass:
@@ -848,15 +853,15 @@ class _Unparser(NodeVisitor):
                 self.traverse(gen)
 
     def visit_GeneratorExp(self, node):
-        if self._source[-1] != "(":
+        if node in self._forgo_parenthesis:
+            self.traverse(node.elt)
+            for gen in node.generators:
+                self.traverse(gen)
+        else:
             with self.delimit("(", ")"):
                 self.traverse(node.elt)
                 for gen in node.generators:
                     self.traverse(gen)
-        else:
-            self.traverse(node.elt)
-            for gen in node.generators:
-                self.traverse(gen)
 
     def visit_SetComp(self, node):
         with self.delimit("{", "}"):
@@ -1072,6 +1077,8 @@ class _Unparser(NodeVisitor):
                 else:
                     comma = True
                 self.attempt_give_namedexpr_free_pass(e)
+                if len(node.args) == 1:
+                    self.attempt_forgo_parens(e)
                 self.traverse(e)
             for e in node.keywords:
                 if comma:
@@ -1325,15 +1332,30 @@ def main():
             if len(data) == 0:
                 continue
             if data.startswith(b"#coding:l1"):  # i just cant deal with this rn
+                new = data.decode('l1').removeprefix('#coding:l1\nimport zlib\nexec(zlib.decompress(bytes(')
+                new = new.removesuffix(",'l1'),-9))")
+                new = new[1:-1]
+                new = new.replace('\\\\', '\\\\')
+                new = new.replace("\\0", '\x00')
+                new = new.replace("\\n", '\x0a')
+                new = new.replace("\\r", '\x0d')
+                new = new.replace("\\'", "'")
+                new = new.replace('\\"', '"')
+                decompressed = zlib.decompress(new.encode('l1'), -9)
+                try:
+                    parse(decompressed)
+                    task_contents[n] = decompressed
+                except (SyntaxError, TypeError, ValueError, IndentationError) as e:
+                    print(f"Failed to parse task {n}. Skipping")
                 continue
             try:
                 parse(data)
+                task_contents[n] = data
             except (SyntaxError, TypeError, ValueError, IndentationError):
                 print(f"Failed to parse task {n}. Skipping")
-            task_contents[n] = data
 
     # filter tasks here for debugging
-    # task_contents = {n: task_contents[n] for n in task_contents if n in [45]}
+    # task_contents = {n: task_contents[n] for n in task_contents if n in [10]}
 
     print(f"Loaded {len(task_contents)} task solutions")
 
