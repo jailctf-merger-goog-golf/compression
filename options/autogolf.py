@@ -7,7 +7,10 @@ import enum
 import keyword
 
 
-original_ast_unparse = unparse
+__all__ = ['golfed_unparse', 'autogolf', "autogolf_unsafe"]
+
+
+official_ast_module_unparse = unparse
 del unparse
 
 
@@ -1382,7 +1385,28 @@ class _Unparser(NodeVisitor):
             self.interleave(lambda: self.write(" | "), self.traverse, node.patterns)
 
 
-def custom_unparse(ast_obj):
+def autogolf_unsafe(code: str) -> str:
+    return golfed_unparse(parse(code))
+
+
+def autogolf(code: str) -> str:
+    """
+    automatically golf/remove whitespace and other nonessential chars from your code. the new code
+    will be parsed to have the same ast as the original code. this is a safe operation (we can detect anomalies)
+
+    it also is careful to make sure the ast from the new autogolfed code is the same as the
+    ast from the original code
+    """
+    original_ast = parse(code)
+    new_code = golfed_unparse(original_ast)
+    new_ast = parse(new_code)
+    # idk any better easy way to compare asts but this is deterministic and should work
+    error_msg = "autogolf bug!\n===\n" + code + '\n==='
+    assert official_ast_module_unparse(original_ast) == official_ast_module_unparse(new_ast), error_msg
+    return new_code
+
+
+def golfed_unparse(ast_obj: AST):
     unparser = _Unparser()
     return unparser.visit(ast_obj)
 
@@ -1391,11 +1415,16 @@ def custom_unparse(ast_obj):
 # ======================================================================================================================
 
 def main():
-    TEST_EXPORT_PATH = r"D:\Downloads\export-1754979744"
+    """run some tests. you will need to change the test export path folder or input it manually"""
+
+    TEST_EXPORT_DIR_PATH = r"D:\Downloads\export-1754979744"
+    while not os.path.isdir(TEST_EXPORT_DIR_PATH):
+        print("Export dir path not found. Enter > ", end="")
+        TEST_EXPORT_DIR_PATH = input()
     PRINT_SHORTER = False  # usually you want this on
     PRINT_LONGER = True  # for debugging and development mostly
 
-    task_paths = [os.path.join(TEST_EXPORT_PATH, fname) for fname in os.listdir(TEST_EXPORT_PATH)]
+    task_paths = [os.path.join(TEST_EXPORT_DIR_PATH, fname) for fname in os.listdir(TEST_EXPORT_DIR_PATH)]
 
     task_contents = {}
     for task_path in task_paths:
@@ -1438,22 +1467,22 @@ def main():
 
     for n in task_contents:
         original_parse = parse(task_contents[n])
-        custom_unparsed = custom_unparse(original_parse)
+        my_unparsed = golfed_unparse(original_parse)
         try:
-            second_parse = parse(custom_unparsed)
+            second_parse = parse(my_unparsed)
         except (SyntaxError, TypeError, ValueError, IndentationError) as e:
             print(f'Parse fail on task {n}')
             raise e
         try:
-            second_unparse = original_ast_unparse(second_parse).split("\n")
-            og_unparse_lines = original_ast_unparse(original_parse).split("\n")
+            second_unparse = official_ast_module_unparse(second_parse).split("\n")
+            og_unparse_lines = official_ast_module_unparse(original_parse).split("\n")
             for su_line in second_unparse:
                 ogu_line = og_unparse_lines.pop(0)
                 if su_line != ogu_line:
                     print('===')
-                    print(original_ast_unparse(second_parse))
+                    print(official_ast_module_unparse(second_parse))
                     print('===')
-                    print(original_ast_unparse(original_parse))
+                    print(official_ast_module_unparse(original_parse))
                     print('===')
                     raise ValueError(f"not the same line:\nCustom: {su_line}\nOG:     {ogu_line}")
             if len(og_unparse_lines):
@@ -1461,28 +1490,28 @@ def main():
         except (SyntaxError, TypeError, ValueError, IndentationError) as e:
             print(f'Parse equality fail on task {n}')
             raise e
-        if len(custom_unparsed) < len(task_contents[n]):
+        if len(my_unparsed) < len(task_contents[n]):
             if PRINT_SHORTER:
                 shorter_success += 1
-                print(f"Shorter success on task {n} by {len(task_contents[n])-len(custom_unparsed)} bytes")
+                print(f"Shorter success on task {n} by {len(task_contents[n])-len(my_unparsed)} bytes")
                 print(f"======== task {n:03d} new ========")
-                print(custom_unparsed)
+                print(my_unparsed)
                 print('-----------------------------------')
-        elif len(custom_unparsed) > len(task_contents[n]):
+        elif len(my_unparsed) > len(task_contents[n]):
             if PRINT_LONGER:
                 length_fail += 1
-                print(f"New length is longer for task {n} by {len(custom_unparsed)-len(task_contents[n])} bytes")
+                print(f"New length is longer for task {n} by {len(my_unparsed)-len(task_contents[n])} bytes")
                 print(f"========== task {n:03d} ==========")
                 print(task_contents[n].decode('l1'))
                 print(f'-------------- new ---------------')
-                print(custom_unparsed)
+                print(my_unparsed)
                 print(f'----------------------------------')
 
     print(f'Success rate: {len(task_contents)-length_fail}/{len(task_contents)}')
 
     # other tests
-    assert custom_unparse(parse('[z:=(2,2)]')) == "[z:=(2,2)]"
-    assert custom_unparse(parse('[(z:=2),2]')) == "[z:=2,2]"
+    assert golfed_unparse(parse('[z:=(2,2)]')) == "[z:=(2,2)]"
+    assert golfed_unparse(parse('[(z:=2),2]')) == "[z:=2,2]"
 
 
 if __name__ == '__main__':
