@@ -7,7 +7,7 @@ import enum
 import keyword
 
 
-__all__ = ['golfed_unparse', 'autogolf', "autogolf_unsafe"]
+__all__ = ['golfed_unparse_unsafe', 'autogolf', "autogolf_unsafe", "ensure_programs_have_same_asts"]
 
 
 official_ast_module_unparse = unparse
@@ -1386,7 +1386,7 @@ class _Unparser(NodeVisitor):
 
 
 def autogolf_unsafe(code: str) -> str:
-    return golfed_unparse(parse(code))
+    return golfed_unparse_unsafe(parse(code))
 
 
 def autogolf(code: str) -> str:
@@ -1397,16 +1397,21 @@ def autogolf(code: str) -> str:
     it also is careful to make sure the ast from the new autogolfed code is the same as the
     ast from the original code
     """
-    original_ast = parse(code)
-    new_code = golfed_unparse(original_ast)
-    new_ast = parse(new_code)
-    # idk any better easy way to compare asts but this is deterministic and should work
+    new_code = golfed_unparse_unsafe(parse(code))
     error_msg = "autogolf bug!\n===\n" + code + '\n==='
-    assert official_ast_module_unparse(original_ast) == official_ast_module_unparse(new_ast), error_msg
+    assert ensure_programs_have_same_asts(code, new_code), error_msg
     return new_code
 
 
-def golfed_unparse(ast_obj: AST):
+def ensure_programs_have_same_asts(before_code: str, after_code: str) -> bool:
+    """
+    being careful to make sure the ast from the new autogolfed code is the same as the ast from the original code
+    """
+    # idk any better easy way to compare asts but this is deterministic and should work
+    return official_ast_module_unparse(parse(before_code)) == official_ast_module_unparse(parse(after_code))
+
+
+def golfed_unparse_unsafe(ast_obj: AST):
     unparser = _Unparser()
     return unparser.visit(ast_obj)
 
@@ -1467,7 +1472,7 @@ def main():
 
     for n in task_contents:
         original_parse = parse(task_contents[n])
-        my_unparsed = golfed_unparse(original_parse)
+        my_unparsed = golfed_unparse_unsafe(original_parse)
         try:
             second_parse = parse(my_unparsed)
         except (SyntaxError, TypeError, ValueError, IndentationError) as e:
@@ -1510,8 +1515,8 @@ def main():
     print(f'Success rate: {len(task_contents)-length_fail}/{len(task_contents)}')
 
     # other tests
-    assert golfed_unparse(parse('[z:=(2,2)]')) == "[z:=(2,2)]"
-    assert golfed_unparse(parse('[(z:=2),2]')) == "[z:=2,2]"
+    assert golfed_unparse_unsafe(parse('[z:=(2,2)]')) == "[z:=(2,2)]"
+    assert golfed_unparse_unsafe(parse('[(z:=2),2]')) == "[z:=2,2]"
 
 
 if __name__ == '__main__':
