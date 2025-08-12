@@ -58,7 +58,7 @@ def get_compressed(code: str | bytes, filename=None, max_brute=10_000, use_tqdm=
     possible = [
         (zlib.compress(code), False),
         (zlib.compress(code, wbits=-15), True),
-        *[(zopfli_compress(code, numiterations=iters)[2:-4], True) for iters in (trange if use_tqdm else range)(1_000, max_brute, 1_000)]
+        *[(zopfli_compress(code, numiterations=iters or 15)[2:-4], True) for iters in (trange if use_tqdm else range)(0, max_brute, 1_000)]
     ]
 
     best = None
@@ -82,3 +82,21 @@ def get_compressed(code: str | bytes, filename=None, max_brute=10_000, use_tqdm=
             f.write(best)
     
     return best
+
+if __name__ == "__main__":
+    code = r"""
+def p(l):
+ j,e,i=len(l),{*''},lambda d,a:(d,a)not in e and-1<d<j>a>=0==l[d][a]and(e.add((d,a))or{(d,a)}|i(d+1,a)|i(d-1,a)|i(d,a+1)|i(d,a-1))or{*''}
+ for d in range(j):
+  for a in range(j):
+   if l[d][a]|((d,a)in e)<1:
+    x=i(d,a)
+    n,r=[max(a)-min(a)for a in zip(*x)]
+    if-~n*-~r^len(x)|n^r<1:
+     for m,b in x:l[m][b]=2
+ return l
+"""
+
+    compressed = get_compressed(code)
+    print(f"Done! {len(code.strip())}b => {len(compressed)}b\n")
+    print(compressed.hex())
