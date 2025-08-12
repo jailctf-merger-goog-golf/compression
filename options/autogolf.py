@@ -1129,6 +1129,8 @@ class _Unparser(NodeVisitor):
             self.set_precedence(operator_precedence, node2)
             if isinstance(node2, BoolOp) and isinstance(node2.op, And):
                 self.set_precedence(Precedence.TEST, node2)
+            if isinstance(node2, Compare):
+                self.set_precedence(Precedence.TEST, node2)
             self.traverse(node2)
 
         with self.require_parens(operator_precedence, node):
@@ -1430,8 +1432,8 @@ def main():
     while not os.path.isdir(TEST_EXPORT_DIR_PATH):
         print("Export dir path not found. Enter > ", end="")
         TEST_EXPORT_DIR_PATH = input()
-    PRINT_SHORTER = False  # usually you want this on
-    PRINT_LONGER = True  # for debugging and development mostly
+    PRINT_SHORTER = True  # usually you want this on
+    PRINT_LONGER = True  # keep on for bug detection during tests
 
     task_paths = [os.path.join(TEST_EXPORT_DIR_PATH, fname) for fname in os.listdir(TEST_EXPORT_DIR_PATH)]
 
@@ -1467,7 +1469,7 @@ def main():
                 print(f"Failed to parse task {n}. Skipping")
 
     # filter tasks here for debugging
-    # task_contents = {n: task_contents[n] for n in task_contents if n in [169]}
+    # task_contents = {n: task_contents[n] for n in task_contents if n in []}
 
     print(f"Loaded {len(task_contents)} task solutions")
 
