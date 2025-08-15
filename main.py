@@ -69,7 +69,7 @@ options = [
 def main():
     first_arg = argv[1]
     if first_arg == "list":
-        print(dumps([option.json() for option in options]))
+        print(dumps([option.json() for option in options]), end="")
     elif first_arg == "run":
 
         if len(argv) < 3:
