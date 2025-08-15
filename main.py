@@ -12,6 +12,7 @@ Usage: python3 {argv[0]} <list|run|var_brute> [args...]
 Example:
  - python3 {argv[0]} list
  - python3 {argv[0]} run autogolf
+ - python3 {argv[0]} run-from-file /path/to/file.py autogolf
     """.strip())
     exit(1)
 
@@ -68,35 +69,37 @@ options = [
 
 def main():
     first_arg = argv[1]
+
     if first_arg == "list":
         print(dumps([option.json() for option in options]))
-    elif first_arg == "run":
+    elif first_arg == "run" or first_arg == "run-from-file":
 
         if len(argv) < 3:
             print_usage_and_exit()
 
         second_arg = argv[2]
 
-        inp = bytes.fromhex(input('hex input > '))
+        if first_arg == "run-from-file":
+            try:
+                with open(argv.pop(2), 'rb') as f:
+                    inp = f.read()
+            except FileNotFoundError as e:
+                print(e)
+                print("no file found")
+                exit(1)
+        else:
+            inp = bytes.fromhex(input('hex input > '))
 
         for option in options:
             if option.name == second_arg:
                 out, debug = option.run(inp)
                 break
         else:
-            print(f'no option named {repr(second_arg)}')
+            print(f'no option named {repr(second_arg)}', file=sys.stderr)
             exit(1)
 
-        # run_type = argv[2]
-        # if run_type == 'compression-v1':
-        #     compressed = get_compressed(inp, max_brute=10_000, use_tqdm=False)
-        # elif run_type == 'compression-v1-fast':
-        #
-        # else:
-        #     raise ValueError(f"Unknown compression type of {run_type!r}")
-
-        print(out)
-        print(debug, file=sys.stderr)
+        print(out.hex())
+        print(debug.decode('l1'), file=sys.stderr)
 
 
 if __name__ == "__main__":
