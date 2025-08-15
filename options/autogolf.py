@@ -1404,7 +1404,7 @@ def autogolf(code: str) -> str:
     ast from the original code
     """
     new_code = golfed_unparse_unsafe(parse(code))
-    error_msg = "autogolf bug!\n===\n" + code + '\n==='
+    error_msg = "major autogolf bug! asts are not the same!\n===\n" + code + '\n===\n' + new_code + "\n===\n"
     assert ensure_programs_have_same_asts(code, new_code), error_msg
     return new_code
 
