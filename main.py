@@ -77,8 +77,6 @@ def main():
         if len(argv) < 3:
             print_usage_and_exit()
 
-        second_arg = argv[2]
-
         if first_arg == "run-from-file":
             try:
                 with open(argv.pop(2), 'rb') as f:
@@ -89,6 +87,8 @@ def main():
                 exit(1)
         else:
             inp = bytes.fromhex(input('hex input > '))
+
+        second_arg = argv[2]
 
         for option in options:
             if option.name == second_arg:
