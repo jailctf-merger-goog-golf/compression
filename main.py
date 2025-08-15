@@ -57,8 +57,11 @@ class CompressionV1FastOption(Option):
         self.local_only = False
 
     def run(self, input_bytes: bytes) -> tuple[bytes, bytes]:
-        compressed = compression.get_compressed(input_bytes, max_brute=3_000, use_tqdm=False)
-        return compressed, b""
+        output_bytes = compression.get_compressed(input_bytes, max_brute=3_000, use_tqdm=False)
+        if len(output_bytes) > len(input_bytes):
+            msg = f"Compressed would not be smaller ({len(input_bytes)}b -> {len(output_bytes)}b). Left unchanged."
+            return input_bytes, msg.encode()
+        return output_bytes, f"Success ({len(input_bytes)}b -> {len(output_bytes)}b)!".encode()
 
 
 options = [
