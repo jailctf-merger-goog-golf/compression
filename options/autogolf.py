@@ -312,10 +312,10 @@ class _Unparser(NodeVisitor):
     def visit_FunctionType(self, node):
         with self.delimit("(", ")"):
             self.interleave(
-                lambda: self.write(", "), self.traverse, node.argtypes
+                lambda: self.write(","), self.traverse, node.argtypes
             )
 
-        self.write(" -> ")
+        self.write("->")
         self.traverse(node.returns)
 
     def visit_Expr(self, node):
@@ -406,22 +406,22 @@ class _Unparser(NodeVisitor):
         self.fill("continue")
 
     def visit_Delete(self, node):
-        self.fill("del ")
+        self.fill("del", " ")
         self.interleave(lambda: self.write(", "), self.traverse, node.targets)
 
     def visit_Assert(self, node):
-        self.fill("assert ")
+        self.fill("assert", " ")
         self.traverse(node.test)
         if node.msg:
-            self.write(", ")
+            self.write(",")
             self.traverse(node.msg)
 
     def visit_Global(self, node):
-        self.fill("global ")
+        self.fill("global", " ")
         self.interleave(lambda: self.write(", "), self.write, node.names)
 
     def visit_Nonlocal(self, node):
-        self.fill("nonlocal ")
+        self.fill("nonlocal", " ")
         self.interleave(lambda: self.write(", "), self.write, node.names)
 
     def visit_Await(self, node):
@@ -442,7 +442,7 @@ class _Unparser(NodeVisitor):
 
     def visit_YieldFrom(self, node):
         with self.require_parens(Precedence.YIELD, node):
-            self.write("yield from ")
+            self.write("yield from", " ")
             if not node.value:
                 raise ValueError("Node can't be used without a value attribute.")
             self.set_precedence(Precedence.ATOM, node.value)
@@ -497,7 +497,7 @@ class _Unparser(NodeVisitor):
             self.write(" ")
             self.traverse(node.type)
         if node.name:
-            self.write(" as ")
+            self.write(" ", "as", " ")
             self.write(node.name)
         can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
         self.semicoloning = not can_semicoloning
@@ -516,13 +516,13 @@ class _Unparser(NodeVisitor):
             comma = False
             for e in node.bases:
                 if comma:
-                    self.write(", ")
+                    self.write(",")
                 else:
                     comma = True
                 self.traverse(e)
             for e in node.keywords:
                 if comma:
-                    self.write(", ")
+                    self.write(",")
                 else:
                     comma = True
                 self.traverse(e)
@@ -1218,7 +1218,7 @@ class _Unparser(NodeVisitor):
             self.traverse(node.step)
 
     def visit_Match(self, node):
-        self.fill("match ")
+        self.fill("match", " ")
         self.traverse(node.subject)
         with self.block():
             for case in node.cases:
@@ -1227,7 +1227,7 @@ class _Unparser(NodeVisitor):
     def visit_arg(self, node):
         self.write(node.arg)
         if node.annotation:
-            self.write(": ")
+            self.write(":")
             self.traverse(node.annotation)
 
     def visit_arguments(self, node):
@@ -1265,7 +1265,7 @@ class _Unparser(NodeVisitor):
         # keyword-only arguments
         if node.kwonlyargs:
             for a, d in zip(node.kwonlyargs, node.kw_defaults):
-                self.write(", ")
+                self.write(",")
                 self.traverse(a)
                 if d:
                     self.write("=")
@@ -1305,19 +1305,19 @@ class _Unparser(NodeVisitor):
     def visit_alias(self, node):
         self.write(node.name)
         if node.asname:
-            self.write(" as " + node.asname)
+            self.write(" ", "as", " ", node.asname)
 
     def visit_withitem(self, node):
         self.traverse(node.context_expr)
         if node.optional_vars:
-            self.write(" as ")
+            self.write(" ", "as", " ")
             self.traverse(node.optional_vars)
 
     def visit_match_case(self, node):
         self.fill("case ")
         self.traverse(node.pattern)
         if node.guard:
-            self.write(" if ")
+            self.write(" ", "if", " ")
             self.traverse(node.guard)
         with self.block():
             self.traverse(node.body)
@@ -1331,7 +1331,7 @@ class _Unparser(NodeVisitor):
     def visit_MatchSequence(self, node):
         with self.delimit("[", "]"):
             self.interleave(
-                lambda: self.write(", "), self.traverse, node.patterns
+                lambda: self.write(","), self.traverse, node.patterns
             )
 
     def visit_MatchStar(self, node):
@@ -1344,20 +1344,20 @@ class _Unparser(NodeVisitor):
         def write_key_pattern_pair(pair):
             k, p = pair
             self.traverse(k)
-            self.write(": ")
+            self.write(":")
             self.traverse(p)
 
         with self.delimit("{", "}"):
             keys = node.keys
             self.interleave(
-                lambda: self.write(", "),
+                lambda: self.write(","),
                 write_key_pattern_pair,
                 zip(keys, node.patterns, strict=True),
             )
             rest = node.rest
             if rest is not None:
                 if keys:
-                    self.write(", ")
+                    self.write(",")
                 self.write(f"**{rest}")
 
     def visit_MatchClass(self, node):
@@ -1366,7 +1366,7 @@ class _Unparser(NodeVisitor):
         with self.delimit("(", ")"):
             patterns = node.patterns
             self.interleave(
-                lambda: self.write(", "), self.traverse, patterns
+                lambda: self.write(","), self.traverse, patterns
             )
             attrs = node.kwd_attrs
             if attrs:
@@ -1376,9 +1376,9 @@ class _Unparser(NodeVisitor):
                     self.traverse(pattern2)
 
                 if patterns:
-                    self.write(", ")
+                    self.write(",")
                 self.interleave(
-                    lambda: self.write(", "),
+                    lambda: self.write(","),
                     write_attr_pattern,
                     zip(attrs, node.kwd_patterns, strict=True),
                 )
@@ -1394,12 +1394,12 @@ class _Unparser(NodeVisitor):
             with self.require_parens(Precedence.TEST, node):
                 self.set_precedence(Precedence.BOR, pattern_expr)
                 self.traverse(pattern_expr)
-                self.write(f" as {node.name}")
+                self.write(" ", f"as", " ", f"{node.name}")
 
     def visit_MatchOr(self, node):
         with self.require_parens(Precedence.BOR, node):
             self.set_precedence(Precedence.BOR.next(), *node.patterns)
-            self.interleave(lambda: self.write(" | "), self.traverse, node.patterns)
+            self.interleave(lambda: self.write("|"), self.traverse, node.patterns)
 
 
 def autogolf_unsafe(code: str) -> str:
