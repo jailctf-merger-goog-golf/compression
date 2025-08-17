@@ -5,6 +5,7 @@ import os
 import zlib
 import enum
 import keyword
+import warnings
 
 
 __all__ = ['golfed_unparse_unsafe', 'autogolf', "autogolf_unsafe", "ensure_programs_have_same_asts"]
@@ -553,13 +554,13 @@ class _Unparser(NodeVisitor):
         self.semicoloning = False
 
     def visit_For(self, node):
-        self._for_helper("for ", node)
+        self._for_helper("for", node)
 
     def visit_AsyncFor(self, node):
-        self._for_helper("async for ", node)
+        self._for_helper("async for", node)
 
     def _for_helper(self, fill, node):
-        self.fill(fill)
+        self.fill(fill, " ")
         self.set_precedence(Precedence.TUPLE, node.target)
         self.traverse(node.target)
         self.write(" ", "in", " ")
@@ -805,6 +806,7 @@ class _Unparser(NodeVisitor):
             return unparser.visit(inner)
 
         with self.delimit("{", "}"):
+            self.attempt_give_namedexpr_free_pass(node.value)
             expr_formatted = unparse_inner(node.value)
             if "\\" in expr_formatted:
                 raise ValueError(
@@ -835,8 +837,11 @@ class _Unparser(NodeVisitor):
         if isinstance(value, (float, complex)):
             # Substitute overflowing decimal literal for AST infinities,
             # and inf - inf for NaNs.
+            reprd = repr(value)
+            if reprd[:2] == "0.":
+                reprd = reprd[1:]  # skip 0 for floating point decimal thing
             self.write(
-                repr(value)
+                reprd
                 .replace("inf", _INFSTR)
                 .replace("nan", f"({_INFSTR}-{_INFSTR})")
             )
@@ -905,6 +910,10 @@ class _Unparser(NodeVisitor):
                             else:
                                 total += char
                     self.write(total + least_quote_byte)
+                    return
+            if isinstance(value, int):
+                if len(repr(value)) > len(hex(value)):
+                    self.write(hex(value))
                     return
             self.write(repr(value))
 
@@ -986,6 +995,8 @@ class _Unparser(NodeVisitor):
     def visit_Set(self, node):
         if node.elts:
             with self.delimit("{", "}"):
+                for node2 in node.elts:
+                    self.attempt_give_namedexpr_free_pass(node2)
                 self.interleave(lambda: self.write(","), self.traverse, node.elts)
         else:
             # `{}` would be interpreted as a dictionary literal, and
@@ -1266,10 +1277,10 @@ class _Unparser(NodeVisitor):
                 # noinspection PyUnusedLocal
                 first = False
             else:
-                self.write(", ")
+                self.write(",")
             self.write("**" + node.kwarg.arg)
             if node.kwarg.annotation:
-                self.write(": ")
+                self.write(":")
                 self.traverse(node.kwarg.annotation)
 
     def visit_keyword(self, node):
@@ -1428,7 +1439,11 @@ def golfed_unparse_unsafe(ast_obj: AST):
 def main():
     """run some tests. you will need to change the test export path folder or input it manually"""
 
-    TEST_EXPORT_DIR_PATH = r"D:\Downloads\export-1755040230"
+    import warnings
+
+    warnings.filterwarnings("ignore")
+
+    TEST_EXPORT_DIR_PATH = r"/home/quasar/Downloads/export-1755448011"
     while not os.path.isdir(TEST_EXPORT_DIR_PATH):
         print("Export dir path not found. Enter > ", end="")
         TEST_EXPORT_DIR_PATH = input()
@@ -1469,7 +1484,7 @@ def main():
                 print(f"Failed to parse task {n}. Skipping")
 
     # filter tasks here for debugging
-    # task_contents = {n: task_contents[n] for n in task_contents if n in []}
+    # task_contents = {n: task_contents[n] for n in task_contents if n in [367]}
 
     print(f"Loaded {len(task_contents)} task solutions")
 
@@ -1507,7 +1522,7 @@ def main():
                 print(f"Shorter success on task {n} by {len(task_contents[n])-len(my_unparsed)} bytes")
                 print(f"======== task {n:03d} new ========")
                 print(my_unparsed)
-                print('-----------------------------------')
+                print('-----------------------------------\n')
         elif len(my_unparsed) > len(task_contents[n]):
             if PRINT_LONGER:
                 length_fail += 1
@@ -1516,7 +1531,7 @@ def main():
                 print(task_contents[n].decode('l1'))
                 print(f'-------------- new ---------------')
                 print(my_unparsed)
-                print(f'----------------------------------')
+                print(f'----------------------------------\n')
 
     print(f'Success rate: {len(task_contents)-length_fail}/{len(task_contents)}')
 
