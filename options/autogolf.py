@@ -1490,6 +1490,7 @@ def main():
 
     length_fail = 0
     shorter_success = 0
+    shorter_success_bytes = 0
 
     for n in task_contents:
         original_parse = parse(task_contents[n])
@@ -1519,6 +1520,7 @@ def main():
         if len(my_unparsed) < len(task_contents[n]):
             if PRINT_SHORTER:
                 shorter_success += 1
+                shorter_success_bytes += len(task_contents[n])-len(my_unparsed)
                 print(f"Shorter success on task {n} by {len(task_contents[n])-len(my_unparsed)} bytes")
                 print(f"======== task {n:03d} new ========")
                 print(my_unparsed)
@@ -1534,6 +1536,8 @@ def main():
                 print(f'----------------------------------\n')
 
     print(f'Success rate: {len(task_contents)-length_fail}/{len(task_contents)}')
+    if PRINT_SHORTER:
+        print(f"Overall saves {shorter_success_bytes} bytes")
 
     # other tests
     assert golfed_unparse_unsafe(parse('[z:=(2,2)]')) == "[z:=(2,2)]"
