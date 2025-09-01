@@ -394,6 +394,7 @@ class _Unparser(NodeVisitor):
         self.fill("return")
         if node.value:
             self.write(" ")
+            self.set_precedence(Precedence.NAMED_EXPR, node.value)
             self.traverse(node.value)
 
     def visit_Pass(self, node):
@@ -654,7 +655,7 @@ class _Unparser(NodeVisitor):
         """
         # dont_care_backslashes requires it to be constant inside of rfstring
 
-        def escape_char(c):
+        def escape_char(c, next_char):
             # \n and \t are non-printable, but we only escape them if
             # escape_special_whitespace is True
             if not escape_special_whitespace and c in "\n\t":
@@ -663,10 +664,12 @@ class _Unparser(NodeVisitor):
             if c == "\\" or not c.isprintable():
                 if c == "\\" and dont_care_backslashes:
                     return '\\'
+                if next_char not in "\"'abfnrtvoxNuU0123456789":
+                    return  "\\"
                 return c.encode("unicode_escape").decode("ascii")
             return c
 
-        escaped_string = "".join(map(escape_char, string))
+        escaped_string = "".join(map(escape_char, string, string[1:] + "'"))
         possible_quotes = quote_types
         if "\n" in escaped_string:
             possible_quotes = [q for q in possible_quotes if q in _MULTI_QUOTES]
@@ -852,7 +855,7 @@ class _Unparser(NodeVisitor):
                 if all(b < 128 for b in value):
                     least_quote_byte = b"'"[0] if value.count(b'"') > value.count(b"'") else b'"'[0]
                     total = 'b' + chr(least_quote_byte)
-                    for byte in value:
+                    for byte, next_byte in zip(value, value[1:] + b'"'):
                         if byte == 0:
                             total += "\\0"
                         elif byte == 0xa:
@@ -862,7 +865,10 @@ class _Unparser(NodeVisitor):
                         elif byte == least_quote_byte:
                             total += f"\\{least_quote_byte:c}"
                         elif byte == 0x5c:
-                            total += "\\\\"
+                            if chr(next_byte) in "\"'abfnrtvoxNuU0123456789":
+                                total += "\\\\"
+                            else:
+                                total += "\\"
                         else:
                             total += chr(byte)
                     self.write(total + chr(least_quote_byte))
@@ -945,17 +951,20 @@ class _Unparser(NodeVisitor):
 
     def visit_GeneratorExp(self, node):
         if node in self._forgo_parenthesis_genexprs:
+            self.attempt_give_namedexpr_free_pass(node.elt)
             self.traverse(node.elt)
             for gen in node.generators:
                 self.traverse(gen)
         else:
             with self.delimit("(", ")"):
+                self.attempt_give_namedexpr_free_pass(node.elt)
                 self.traverse(node.elt)
                 for gen in node.generators:
                     self.traverse(gen)
 
     def visit_SetComp(self, node):
         with self.delimit("{", "}"):
+            self.attempt_give_namedexpr_free_pass(node.elt)
             self.traverse(node.elt)
             for gen in node.generators:
                 self.traverse(gen)
@@ -1443,7 +1452,7 @@ def main():
 
     warnings.filterwarnings("ignore")
 
-    TEST_EXPORT_DIR_PATH = r"/home/quasar/Downloads/export-1755448011"
+    TEST_EXPORT_DIR_PATH = r"/home/quasar/Downloads/export-1756751129"
     while not os.path.isdir(TEST_EXPORT_DIR_PATH):
         print("Export dir path not found. Enter > ", end="")
         TEST_EXPORT_DIR_PATH = input()
@@ -1484,7 +1493,7 @@ def main():
                 print(f"Failed to parse task {n}. Skipping")
 
     # filter tasks here for debugging
-    # task_contents = {n: task_contents[n] for n in task_contents if n in [367]}
+    # task_contents = {n: task_contents[n] for n in task_contents if n in [48]}
 
     print(f"Loaded {len(task_contents)} task solutions")
 

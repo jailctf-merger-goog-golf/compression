@@ -3,6 +3,7 @@ from tqdm import trange
 import warnings
 import random
 import re
+from sys import argv
 
 # possible single letter varnames to use
 VARNAMES = list("abcdefghijklmnopqrstuvwxyz")
@@ -78,6 +79,8 @@ def p(g):
       for B,A,r in m[v]:g[y-A][x-B*(1|-(v==2))]=r
   return g
 """
+    if len(argv) > 1:
+        code = bytes.fromhex(argv[1]).decode('l1')
 
     bruted, compressed = do_brute(code, 10_000)
 
