@@ -44,7 +44,11 @@ class AutogolfOption(Option):
     def run(self, input_bytes: bytes) -> tuple[bytes, bytes]:
         try:
             output_bytes = autogolf.autogolf(input_bytes.decode('l1')).encode('l1')
-            debug = f"Success ({len(input_bytes)}b -> {len(output_bytes)}b)".encode()
+            if len(output_bytes) > len(input_bytes):
+                debug = f"Failure ({len(input_bytes)}b -> {len(output_bytes)}b)"
+                output_bytes = input_bytes
+            else:
+                debug = f"Success ({len(input_bytes)}b -> {len(output_bytes)}b)".encode()
         except AssertionError as e:
             output_bytes = input_bytes
             debug = str(e.args[0]).encode('l1')
