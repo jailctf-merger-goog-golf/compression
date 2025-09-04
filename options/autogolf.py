@@ -1458,10 +1458,12 @@ def main():
         TEST_EXPORT_DIR_PATH = input()
     PRINT_SHORTER = True  # usually you want this on
     PRINT_LONGER = True  # keep on for bug detection during tests
+    SHOW_SHORTER_COMPRESSED = True
 
     task_paths = [os.path.join(TEST_EXPORT_DIR_PATH, fname) for fname in os.listdir(TEST_EXPORT_DIR_PATH)]
 
     task_contents = {}
+    task_compressed = {}
     for task_path in task_paths:
         n = int(os.path.basename(task_path).removesuffix('.py').removeprefix('task'), 10)
         with open(task_path, 'rb') as f:
@@ -1483,12 +1485,14 @@ def main():
                 try:
                     parse(decompressed)
                     task_contents[n] = decompressed
+                    task_compressed[n] = True
                 except (SyntaxError, TypeError, ValueError, IndentationError) as e:
                     print(f"Failed to parse task {n}. Skipping")
                 continue
             try:
                 parse(data)
                 task_contents[n] = data
+                task_compressed[n] = False
             except (SyntaxError, TypeError, ValueError, IndentationError):
                 print(f"Failed to parse task {n}. Skipping")
 
@@ -1526,7 +1530,7 @@ def main():
         except (SyntaxError, TypeError, ValueError, IndentationError) as e:
             print(f'Parse equality fail on task {n}')
             raise e
-        if len(my_unparsed) < len(task_contents[n]):
+        if len(my_unparsed) < len(task_contents[n]) and (SHOW_SHORTER_COMPRESSED or not task_compressed[n]):
             if PRINT_SHORTER:
                 shorter_success += 1
                 shorter_success_bytes += len(task_contents[n])-len(my_unparsed)
