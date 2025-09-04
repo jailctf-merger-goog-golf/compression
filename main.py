@@ -1,6 +1,6 @@
 import sys
 from sys import argv
-from options import autogolf, compression
+from options import autogolf, compression, infgen_analysis
 from json import dumps
 from typing import Any
 
@@ -68,9 +68,20 @@ class CompressionV1FastOption(Option):
         return output_bytes, f"Success ({len(input_bytes)}b -> {len(output_bytes)}b)!".encode()
 
 
+class InfgenAnalysisOption(Option):
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.local_only = False
+
+    def run(self, input_bytes: bytes) -> tuple[bytes, bytes]:
+        debug_bytes = infgen_analysis.infgen_call(input_bytes)
+        return input_bytes, debug_bytes
+
+
 options = [
     AutogolfOption("autogolf-v1"),
-    CompressionV1FastOption("compression-v1-fast")
+    CompressionV1FastOption("compression-v1-fast"),
+    InfgenAnalysisOption("infgen-analysis")
 ]
 
 
