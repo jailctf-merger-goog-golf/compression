@@ -74,8 +74,22 @@ class InfgenAnalysisOption(Option):
         self.local_only = False
 
     def run(self, input_bytes: bytes) -> tuple[bytes, bytes]:
-        debug_bytes = infgen_analysis.infgen_call(input_bytes)
-        return input_bytes, debug_bytes
+        if not input_bytes.startswith(b"#coding:l1"):
+            return input_bytes, b'Does not start with #coding:l1. Skipping'
+
+        new = input_bytes.decode('l1').removeprefix('#coding:l1\nimport zlib\nexec(zlib.decompress(bytes(')
+        new = new.removesuffix(",'l1'),-9))")
+        new = new[1:-1]
+        # scuffed asf !
+        new = new.replace('\\\\', '\\\\')
+        new = new.replace("\\0", '\x00')
+        new = new.replace("\\n", '\x0a')
+        new = new.replace("\\r", '\x0d')
+        new = new.replace("\\'", "'")
+        new = new.replace('\\"', '"')
+        new = new.encode('l1')
+        debug_bytes = infgen_analysis.infgen_call(new)
+        return input_bytes, debug_bytes.encode('l1')
 
 
 options = [
