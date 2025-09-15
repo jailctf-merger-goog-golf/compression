@@ -147,7 +147,7 @@ REPLACE_MUTATION_RATE = 0.05  # Probability of swapping a letter for a new one
 
 # --- ORIGINAL CODE SETUP ---
 VARNAMES = list("abcdefghijklmnopqrstuvwxyz")
-VAR_PAT = re.compile(r"\b(?!\"|')(?!p\(|p=lambda)(?<!\"|'|%)(?<!b'%)(?<!.%)[a-zA-Z_]\b(?<!def p)")
+VAR_PAT = re.compile(r"\b(?!p\(|p=lambda)(?<!\"|'|%)(?<!b'%)(?<!.%)[a-zA-Z_](?!\"|')\b(?<!def p)")
 
 # (?<!key=)
 
