@@ -14,7 +14,7 @@ def infgen_call(data):
         f.write(data)
         f.flush()
         try:
-            proc = subprocess.run([INFGEN_BINARY, '-m', f.name], capture_output=True, timeout=2, text=True, encoding='latin-1')
+            proc = subprocess.run([INFGEN_BINARY, '-m', '-dd', f.name], capture_output=True, timeout=2, text=True, encoding='latin-1')
             if proc.returncode != 0:
                 msg = '!! FAIL !!\n\n' + proc.stderr + '====\n' + proc.stdout
             else:
@@ -28,7 +28,7 @@ def infgen_call(data):
 
 
 def main():
-    print(infgen_call(zlib.compress(b'qwdqwdqwd123123qwdqwdqwd',wbits=-9)))
+    print(infgen_call(zlib.compress(b'qwdqwdqwd123123123qwdqwdqwd',wbits=-9)))
 
 
 if __name__ == '__main__':
