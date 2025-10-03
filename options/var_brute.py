@@ -1,5 +1,5 @@
 from compression import get_compressed 
-from tqdm import trange # pyright: ignore[reportMissingModuleSource]
+from tqdm import trange
 import warnings
 import random
 import re

@@ -2,7 +2,7 @@ import re
 import random
 import warnings
 from sys import argv
-from tqdm import trange, tqdm # pyright: ignore[reportMissingModuleSource]
+from tqdm import trange, tqdm
 from functools import lru_cache
 from compression import get_compressed_X
 

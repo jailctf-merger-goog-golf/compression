@@ -1,6 +1,6 @@
 import zlib
-from zopfli.zlib import compress as zopfli_compress # type: ignore
-from tqdm import tqdm, trange # pyright: ignore[reportMissingModuleSource]
+from zopfli.zlib import compress as zopfli_compress
+from tqdm import tqdm, trange
 import re
 import sys
 
@@ -47,7 +47,7 @@ def make_code(compressed: bytes, add_wbits: bool, least_quote: int, most_quote: 
     return new_code
 
 def make_code_X(compressed: bytes, add_wbits: bool, least_quote: int, most_quote: int):
-    
+
     return make_code(compressed, add_wbits, least_quote, most_quote), len(compressed)
 
 
