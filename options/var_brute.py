@@ -1,14 +1,14 @@
-from compression import get_compressed
-from tqdm import trange
+from compression import get_compressed 
+from tqdm import trange # pyright: ignore[reportMissingModuleSource]
 import warnings
 import random
 import re
 from sys import argv
 
 # possible single letter varnames to use
-VARNAMES = list("abcdefghijklmnopqrstuvwxyz")
+VARNAMES = list("abcdefghijklmnoqrstuvwxyz")
 
-VAR_PAT = re.compile(r"\b(?<!\"|')(?!p\()[a-zA-Z_](?!\"|')\b(?<!def p)")
+VAR_PAT = re.compile(r"\b(?<!\"|'|%)(?!p\()[a-zA-Z_](?!\"|')\b(?<!def p)")
 
 def do_rand_compress(code, check_syntax=False):
     global VARNAMES, VAR_PAT
@@ -61,28 +61,23 @@ def do_brute(code: str | bytes, iterations: int, use_tqdm=True, log_best=True):
 
 if __name__ == "__main__":
     code = r"""
-def f(g,x,y,s):
- for A in-1,0,1:
-  for B in-1,0,1:
-   if B|A!=0<=x+B<13>y+A>=0<g[y+A][x+B]and((x+B,y+A)in s)<1:s=f(g,x+B,y+A,s|{(x+B,y+A)})
- return s
-def p(g):
-  m={}
-  for y,r in enumerate(g):
-   for x,v in enumerate(r):
-    if{v}&{3,2}:
-     if len(S:=f(g,x,y,set()))>1:m[v]=({(x-B,y-A,g[A][B])for B,A in S}-{(0,0,v)})
-  for y,r in enumerate(g):
-   for x,v in enumerate(r):
-    if{v}&{3,2}:
-     if len(S:=f(g,x,y,set()))<2:
-      for B,A,r in m[v]:g[y-A][x-B*(1|-(v==2))]=r
-  return g
+def p(e):
+ for u,b in enumerate(e):
+  for r,i in enumerate(b):
+   for t,*b in b"lump",b"ltp",b"lur":
+    try:
+     for f in b:e[u+f%4][r+f%3]&4or l
+     for f in b:e[u+f%4][r+f%3]=t
+     if p(e):return e
+     for f in b:e[u+f%4][r+f%3]=5
+    except:e
+   if i&4:return 
+ return e
 """
     if len(argv) > 1:
         code = bytes.fromhex(argv[1]).decode('l1')
 
-    bruted, compressed = do_brute(code, 10_000)
+    bruted, compressed = do_brute(code, 100_000)
 
     print("=" * 50)
     print(f"Best code | {len(bruted)}b => {len(compressed)}b\n{bruted}\n\n{compressed.hex()}")

@@ -2,9 +2,9 @@ import re
 import random
 import warnings
 from sys import argv
-from tqdm import trange, tqdm
+from tqdm import trange, tqdm # pyright: ignore[reportMissingModuleSource]
 from functools import lru_cache
-from compression import get_compressed
+from compression import get_compressed_X
 
 # --- CACHING FOR PERFORMANCE ---
 @lru_cache(maxsize=None)
@@ -19,9 +19,9 @@ def evaluate_fitness(code, original_vars, chromosome_tuple):
     
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=SyntaxWarning)
-        compressed_code = get_compressed(bruted_code, max_brute=1_000, use_tqdm=False, check_syntax=False)
+        compressed_code, raw_length = get_compressed_X(bruted_code, max_brute=1_000, use_tqdm=False, check_syntax=False)
 
-    fitness = -len(compressed_code)
+    fitness = -raw_length - len(compressed_code)/1000
     return fitness, bruted_code, compressed_code
 
 # --- GENETIC ALGORITHM OPERATORS ---
@@ -100,16 +100,19 @@ def do_genetic_optimization(code: str, use_tqdm=True, log_best=True):
             best_individual = population[best_idx]
             
             _, bruted, compressed = evaluate_fitness(code, tuple(original_vars), tuple(best_individual))
-            best_bruted_code = bruted
-            best_compressed_code = compressed
-            
-            # <-- CHANGE: Updated the logging block to match your request
-            if log_best:
-                print(f"\nNew best {len(code)}b => {len(best_compressed_code)}b! (Gen: {gen})")
-                print(best_bruted_code)
-                print()
-                print(best_compressed_code.hex())
-                print('=' * 50)
+
+            if best_compressed_code is None or len(best_compressed_code) > len(compressed):
+
+                best_bruted_code = bruted
+                best_compressed_code = compressed
+                
+                # <-- CHANGE: Updated the logging block to match your request
+                if log_best:
+                    print(f"\nNew best {len(code)}b => {len(best_compressed_code)}b! (Gen: {gen})")
+                    print(best_bruted_code)
+                    print()
+                    print(best_compressed_code.hex())
+                    print('=' * 50)
 
 
         if use_tqdm:
@@ -139,7 +142,7 @@ def do_genetic_optimization(code: str, use_tqdm=True, log_best=True):
 
 # --- GENETIC ALGORITHM PARAMETERS ---
 POPULATION_SIZE = 1000
-GENERATIONS = 10000 # usually like 100 is enough but sometimes you want more.
+GENERATIONS = 10000
 ELITE_SIZE = 30
 TOURNAMENT_SIZE = 10
 SWAP_MUTATION_RATE = 0.05     # Probability of swapping order
@@ -147,14 +150,13 @@ REPLACE_MUTATION_RATE = 0.05  # Probability of swapping a letter for a new one
 
 # --- ORIGINAL CODE SETUP ---
 VARNAMES = list("abcdefghijklmnopqrstuvwxyz")
-VAR_PAT = re.compile(r"\b(?!\"|')(?!p\(|p=lambda)(?<!\"|'|%)(?<!b'%)(?<!.%)[a-zA-Z_]\b(?<!def p)")
+VAR_PAT = re.compile(r"\b(?!p\(|p:?=lambda)(?<!\"|'|%|\\)(?<!b'%|ey=)(?<!.%)[a-zA-Z_](?!\"|')\b(?<!def p)")
 
 # (?<!key=)
 
 if __name__ == "__main__":
     code = r"""
-import re
-def p(n):t=f'{n+[*zip(*n)]}';g=re.sub("[, ]","",t+t[::-1]);r={s+max(g,key=t.count)*len(e)+s if e else i*3for a,s,i,e in re.findall(r"(?=((([^%s])\3+)((?:(?!\3|]|\)).)*)\3))"%max(g,key=t.count),g)};r=([g for g in{*t}if t.count(g)<3]or[max(g,key=t.count)])+[g*3for g in{*t}if t.count(g)==6]+sorted({g for g in r if str(r).count(g)<2},key=len);return[[int(r[~min(e,len(r)*2-1+~e,l,len(r)*2-1+~l)][min(abs(e-l),abs(len(r)*2-1+~e-l))])for l in range(len(r)*2-1)]for e in range(len(r)*2-1)]
+def p(e):r=o,n,d,a=sorted({*sum(e,[])},key=sum(e,[]).count);return[[[e[s][t],r[(e[s][t]==a)==({o,d}in map(set,e+[*zip(*e)])or{n,a}in map(set,e+[*zip(*e)]))]][any(e[i][f]in(o,n)for i in range(len(e))for f in range(len(e[s]))if i-s in(f-t,t-f))and e[s][t]in(d,a)]for t in range(len(e[s]))]for s in range(len(e))]
 """
     if len(argv) > 1:
         code = bytes.fromhex(argv[1]).decode('l1')
@@ -164,3 +166,4 @@ def p(n):t=f'{n+[*zip(*n)]}';g=re.sub("[, ]","",t+t[::-1]);r={s+max(g,key=t.coun
     print("=" * 50)
     print(f"Best code found | {len(bruted)}b => {len(compressed)}b\n{bruted}\n\n{compressed.hex()}")
     print("=" * 50)
+
