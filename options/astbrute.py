@@ -4,6 +4,7 @@ from ast import *
 import autogolf
 from os.path import join, dirname
 import warnings
+import inspect
 warnings.filterwarnings("ignore")
 
 _const_node_type_names = {
@@ -36,38 +37,42 @@ def nuke_nodes_gen(ast):
     """a.k.a node deletion operation"""
 
     class NodeTransformerGenerator:
-        def visit(self, node):
+        def visit(self, node, root_node=True):
             """Visit a node."""
             method = 'visit_' + node.__class__.__name__
             visitor = getattr(self, method, self.generic_visit)
-            # noinspection PyArgumentList
-            return visitor(node)
+            for new_field, new_value in visitor(node):
+                new_self = node.__class__()  # epic philosophy moment
+                for old_field, old_value in iter_fields(node):
+                    setattr(new_self, old_field, old_value)
+                # print(len(inspect.stack(0)), f"visit ({node=})", root_node, new_field, new_value)
+                # either way we yield up the call stack
+                if new_value is None:  # delete this node so yield
+                    delattr(new_self, new_field)
+                else:  # the node below is modified so yield with modifications
+                    setattr(new_self, new_field, new_value)
+                yield new_self
 
         def generic_visit(self, node):
             # print('Enter', node)
             for field, old_value in iter_fields(node):
+                if field in ["type_ignores"]:  # lame ass fields
+                    continue
                 if isinstance(old_value, list):
-                    new_values = []
-                    for value in old_value:
+                    for i, value in enumerate(old_value):
                         if isinstance(value, AST):
-                            value = self.visit(value)
-                            if value is None:
-                                continue
-                            elif not isinstance(value, AST):
-                                new_values.extend(value)
-                                continue
-                        new_values.append(value)
-                    old_value[:] = new_values
+                            res = self.visit(value, False)
+                            for yielded in res:
+                                yield field, old_value[:i] + [yielded] + old_value[i+1:]
+                            yield field, old_value[:i] + old_value[i+1:]
+                elif isinstance(old_value, Constant):
+                    yield field, None
                 elif isinstance(old_value, AST):  # AST class = superclass of all ast node classes
-                    new_node = self.visit(old_value)
-                    # VV this is where the sauce is VV
-                    if new_node is None:
-                        delattr(node, field)
-                    else:
-                        setattr(node, field, new_node)
-                    # ^^ this is where the sauce is ^^
+                    visit_res = self.visit(old_value, False)
+                    for possibility2 in visit_res:
+                        yield field, possibility2
+                    yield field, None
             # print("Exit", node)
-            return node
 
         def visit_Constant(self, node):
             value = node.value
@@ -89,11 +94,7 @@ def nuke_nodes_gen(ast):
                                   DeprecationWarning, 2)
                     return visitor(node)
             return self.generic_visit(node)
-
-    print(dump(ast))
-    print(NodeTransformerGenerator().visit(ast))
-
-    return []
+    yield from NodeTransformerGenerator().visit(ast)
 
 
 def test_code(task_num, code, return_on_first_fail=True) -> TestCodeStatus:
@@ -132,22 +133,31 @@ def test_code(task_num, code, return_on_first_fail=True) -> TestCodeStatus:
 
 
 def test_ast(task_num, ast):
-    return test_code(task_num, autogolf.autogolf_unsafe(ast))
+    # noinspection PyBroadException
+    try:
+        res = autogolf.autogolf_unsafe(ast)
+    except Exception as e:
+        print(e)
+        return -3
+    return test_code(task_num, res)
 
 
 def astbrute(task_num, ast):
     # print(dump(ast))
     # print(test_ast(task_num, ast))
-    for variation in nuke_nodes_gen(
-            BinOp(op=Add(), left=Constant(value=1), right=Constant(value=3))
-    ):
-        print(variation)
+    # for variation in nuke_nodes_gen(parse("print('abc'[0:2])")):
+    for variation in nuke_nodes_gen(ast):
+        print('variation', dump(variation))
+        print(test_ast(task_num, variation))
 
 
 def main():
     task_num = 98
     code = "p=lambda g,x=[],z=[]:g*0!=0and[*map(p,g,g[0:1]+x+g,(z+g)[1:]+g)]or(x*z<1)*g"
     #       p=lambda g,x=[],z=[]:g*0!=0and[*map(p,g,g[:1]+x+g,(z+g)[1:]+g)]or(x*z<1)*g
+
+    task_num = 150
+    code = "p=lambda g:[r[0::-1]for r in g]"
     astbrute(task_num, parse(code))
 
 
