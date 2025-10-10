@@ -804,12 +804,15 @@ class _Unparser(NodeVisitor):
 
     def visit_FormattedValue(self, node):
         def unparse_inner(inner):
+            # why does it feel the need to create another one of itself wtf
             unparser = type(self)(_avoid_backslashes=True)
+            unparser._forgo_parenthesis_tuples = self._forgo_parenthesis_tuples
             unparser.set_precedence(Precedence.TEST.next(), inner)
             return unparser.visit(inner)
 
         with self.delimit("{", "}"):
             self.attempt_give_namedexpr_free_pass(node.value)
+            self.attempt_forgo_parens_tuples(node.value)
             expr_formatted = unparse_inner(node.value)
             if "\\" in expr_formatted:
                 raise ValueError(
@@ -899,11 +902,11 @@ class _Unparser(NodeVisitor):
                                 total += char
                     else:
                         for i, char in enumerate(value):
-                            if char == 0:
+                            if char == '\x00':
                                 total += "\\0"
-                            elif char == 0xa:
+                            elif char == '\n':
                                 total += '\\n'
-                            elif char == 0xd:
+                            elif char == '\r':
                                 total += '\\r'
                             elif char == least_quote_byte:
                                 total += f"\\{least_quote_byte:c}"
@@ -1452,13 +1455,13 @@ def main():
 
     warnings.filterwarnings("ignore")
 
-    TEST_EXPORT_DIR_PATH = r"/home/quasar/Downloads/export-1756751129"
+    TEST_EXPORT_DIR_PATH = r"C:\Users\quasar\Downloads\export-1760061589"
     while not os.path.isdir(TEST_EXPORT_DIR_PATH):
         print("Export dir path not found. Enter > ", end="")
         TEST_EXPORT_DIR_PATH = input()
     PRINT_SHORTER = True  # usually you want this on
     PRINT_LONGER = True  # keep on for bug detection during tests
-    SHOW_SHORTER_COMPRESSED = True
+    SHOW_SHORTER_COMPRESSED = False
 
     task_paths = [os.path.join(TEST_EXPORT_DIR_PATH, fname) for fname in os.listdir(TEST_EXPORT_DIR_PATH)]
 
@@ -1497,7 +1500,7 @@ def main():
                 print(f"Failed to parse task {n}. Skipping")
 
     # filter tasks here for debugging
-    # task_contents = {n: task_contents[n] for n in task_contents if n in [48]}
+    # task_contents = {n: task_contents[n] for n in task_contents if n in [390]}
 
     print(f"Loaded {len(task_contents)} task solutions")
 
@@ -1535,7 +1538,9 @@ def main():
                 shorter_success += 1
                 shorter_success_bytes += len(task_contents[n])-len(my_unparsed)
                 print(f"Shorter success on task {n} by {len(task_contents[n])-len(my_unparsed)} bytes")
-                print(f"======== task {n:03d} new ========")
+                print(f"======== task {n:03d} ============")
+                print(task_contents[n].decode('l1'))
+                print(f'-------------- new ---------------')
                 print(my_unparsed)
                 print('-----------------------------------\n')
         elif len(my_unparsed) > len(task_contents[n]):
