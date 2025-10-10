@@ -223,9 +223,10 @@ class _Unparser(NodeVisitor):
             return node
 
     def get_type_comment(self, node):
-        comment = self._type_ignores.get(node.lineno) or node.type_comment
-        if comment is not None:
-            return f" # type: {comment}"
+        # comment = self._type_ignores.get(node.lineno) or node.type_comment
+        # if comment is not None:
+        #     return f" # type: {comment}"
+        return None  # nah, i'd win
 
     def traverse(self, node):
         if isinstance(node, list):

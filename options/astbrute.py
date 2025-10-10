@@ -3,9 +3,9 @@ import json
 from ast import *
 import autogolf
 from os.path import join, dirname
-import warnings
-import inspect
-warnings.filterwarnings("ignore")
+import os
+import zlib
+import multiprocessing
 
 _const_node_type_names = {
     bool: 'NameConstant',  # should be before int
@@ -19,18 +19,19 @@ _const_node_type_names = {
 }
 
 jsonfile_cache = {}
-DEBUG = False
-
-
-def dprint(*args, **kwargs):
-    if DEBUG:
-        print(*args, **kwargs)
 
 
 class TestCodeStatus(enum.Enum):
     SUCCESS = 0
     TC_FAIL = 1
     ERROR = 2
+    ERROR_UNRECOVERABLE = 3
+    TIMEOUT = 4
+
+SKIP_FIELD_NODES_COMBOS = {
+    ("type_ignores", Module),
+    ("lineno", Assign)
+}
 
 
 def nuke_nodes_gen(ast):
@@ -56,7 +57,7 @@ def nuke_nodes_gen(ast):
         def generic_visit(self, node):
             # print('Enter', node)
             for field, old_value in iter_fields(node):
-                if field in ["type_ignores"]:  # lame ass fields
+                if (field, type(node)) in SKIP_FIELD_NODES_COMBOS:  # lame ass fields
                     continue
                 if isinstance(old_value, list):
                     for i, value in enumerate(old_value):
@@ -97,6 +98,7 @@ def nuke_nodes_gen(ast):
     yield from NodeTransformerGenerator().visit(ast)
 
 
+# noinspection PyBroadException
 def test_code(task_num, code, return_on_first_fail=True) -> TestCodeStatus:
     if task_num not in jsonfile_cache:
         jsonfile = join(dirname(dirname(__file__)), "infos", f"task{task_num:03d}.json")
@@ -112,20 +114,30 @@ def test_code(task_num, code, return_on_first_fail=True) -> TestCodeStatus:
     import importlib.util
     spec = importlib.util.spec_from_loader('epic_facility', loader=None)
     module = importlib.util.module_from_spec(spec)
-    exec(code, module.__dict__)
-    assert hasattr(module, "p"), "Error: Unable to locate function p() in task.py."
+    try:
+        exec(code, module.__dict__)
+    except (SyntaxError, TypeError):
+        return TestCodeStatus.ERROR_UNRECOVERABLE
+    if not hasattr(module, "p"):
+        return TestCodeStatus.ERROR_UNRECOVERABLE
     program = getattr(module, "p")
-    assert callable(program), "Error: Function p() in task.py is not callable."
+    if not callable(program):
+        return TestCodeStatus.ERROR_UNRECOVERABLE
 
     failed = False
     for tcnum in jsonfile_cache[task_num]:
         tc_data = jsonfile_cache[task_num][tcnum]
         inp = tc_data["input"]
         out = tc_data["output"]
-        res = json.loads(json.dumps(program(inp)).replace("true", "1").replace("false", "0"))
+        try:
+            res = program(inp)
+        except:
+            return TestCodeStatus.ERROR
+        res = json.loads(json.dumps(res).replace("true", "1").replace("false", "0"))
         if res != out:
             failed = True
             if return_on_first_fail:
+
                 return TestCodeStatus.TC_FAIL
     if failed:
         return TestCodeStatus.TC_FAIL
@@ -135,30 +147,94 @@ def test_code(task_num, code, return_on_first_fail=True) -> TestCodeStatus:
 def test_ast(task_num, ast):
     # noinspection PyBroadException
     try:
-        res = autogolf.autogolf_unsafe(ast)
+        code = autogolf.autogolf_unsafe(ast)
     except Exception as e:
-        print(e)
-        return -3
-    return test_code(task_num, res)
+        return TestCodeStatus.ERROR_UNRECOVERABLE
+
+    res = test_code(task_num, code)
+
+    return res
 
 
 def astbrute(task_num, ast):
     # print(dump(ast))
-    # print(test_ast(task_num, ast))
-    # for variation in nuke_nodes_gen(parse("print('abc'[0:2])")):
-    for variation in nuke_nodes_gen(ast):
-        print('variation', dump(variation))
-        print(test_ast(task_num, variation))
+    best_code = autogolf.golfed_unparse_unsafe(ast)
+    # print(f"Cur Best ({len(best_code):03d}b): {best_code}")
+    # print('===')
+    # for new_ast in nuke_nodes_gen(parse("print('abc'[0:2])")):
+
+    made_improvement = False
+    for new_ast in nuke_nodes_gen(ast):
+        # print('new_ast', dump(new_ast))
+        result = test_ast(task_num, new_ast)
+        if result == TestCodeStatus.SUCCESS:
+            new_code = autogolf.golfed_unparse_unsafe(new_ast)
+            if len(new_code) < len(best_code):
+                best_code = new_code
+                print(f"New best (t{task_num:03d}, {len(new_code):03d}b): {new_code}")
+                made_improvement = True
+        else:
+            # print(result)
+            pass
+    if not made_improvement:
+        print(f"no improvements to t{task_num:03d}")
 
 
 def main():
-    task_num = 98
-    code = "p=lambda g,x=[],z=[]:g*0!=0and[*map(p,g,g[0:1]+x+g,(z+g)[1:]+g)]or(x*z<1)*g"
-    #       p=lambda g,x=[],z=[]:g*0!=0and[*map(p,g,g[:1]+x+g,(z+g)[1:]+g)]or(x*z<1)*g
+    import warnings
+    warnings.filterwarnings("ignore")
 
-    task_num = 150
-    code = "p=lambda g:[r[0::-1]for r in g]"
-    astbrute(task_num, parse(code))
+    TEST_EXPORT_DIR_PATH = r"C:\Users\quasar\Downloads\export-1760061589"
+    while not os.path.isdir(TEST_EXPORT_DIR_PATH):
+        print("Export dir path not found. Enter > ", end="")
+        TEST_EXPORT_DIR_PATH = input()
+    DO_COMPRESSED_SOLS = False
+    DO_GX2_SOLS = False
+
+    task_paths = [join(TEST_EXPORT_DIR_PATH, fname) for fname in os.listdir(TEST_EXPORT_DIR_PATH)]
+
+    task_contents = {}
+    task_compressed = {}
+    for task_path in task_paths:
+        n = int(os.path.basename(task_path).removesuffix('.py').removeprefix('task'), 10)
+        with open(task_path, 'rb') as f:
+            data = f.read()
+            if len(data) == 0:
+                continue
+            if b'g*2' in data and not DO_GX2_SOLS:
+                continue
+            if data.startswith(b"#coding:l1"):  # i just cant deal with this rn
+                new = data.decode('l1').removeprefix('#coding:l1\nimport zlib\nexec(zlib.decompress(bytes(')
+                new = new.removesuffix(",'l1'),-9))")
+                new = new[1:-1]
+                # scuffed asf !
+                new = new.replace('\\\\', '\\\\')
+                new = new.replace("\\0", '\x00')
+                new = new.replace("\\n", '\x0a')
+                new = new.replace("\\r", '\x0d')
+                new = new.replace("\\'", "'")
+                new = new.replace('\\"', '"')
+                decompressed = zlib.decompress(new.encode('l1'), -9)
+                try:
+                    parse(decompressed)
+                    task_contents[n] = decompressed
+                    task_compressed[n] = True
+                except (SyntaxError, TypeError, ValueError, IndentationError) as e:
+                    print(f"Failed to parse task {n}. Skipping")
+                continue
+            try:
+                parse(data)
+                task_contents[n] = data
+                task_compressed[n] = False
+            except (SyntaxError, TypeError, ValueError, IndentationError):
+                print(f"Failed to parse task {n}. Skipping")
+    print("All sols loaded.")
+
+    for task_num in task_contents:
+        if (not DO_COMPRESSED_SOLS) and task_compressed[task_num]:
+            continue
+        code = autogolf.autogolf(task_contents[task_num].decode('l1'))
+        astbrute(task_num, parse(code))
 
 
 if __name__ == '__main__':
