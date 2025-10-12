@@ -1134,8 +1134,10 @@ class _Unparser(NodeVisitor):
             self.traverse(node.left)
             for o, e in zip(node.ops, node.comparators):
                 op_text = self.cmpops[o.__class__.__name__]
-                if op_text in ("is", "is not", "in", "not in"):
+                if op_text in ("is", "in"):
                     self.write(" ", op_text, " ")
+                elif op_text in ("is not", "not in"):
+                    self.write(" ", op_text.split(" ")[0], " ", op_text.split(" ")[1], " ")
                 else:
                     self.write(op_text)
                 self.traverse(e)
@@ -1456,7 +1458,7 @@ def main():
 
     warnings.filterwarnings("ignore")
 
-    TEST_EXPORT_DIR_PATH = r"C:\Users\quasar\Downloads\export-1760061589"
+    TEST_EXPORT_DIR_PATH = r"C:\Users\quasar\Downloads\export-1760312562"
     while not os.path.isdir(TEST_EXPORT_DIR_PATH):
         print("Export dir path not found. Enter > ", end="")
         TEST_EXPORT_DIR_PATH = input()
