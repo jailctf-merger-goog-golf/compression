@@ -86,6 +86,13 @@ def nuke_char_gen(code, exclude_indicies: list[int] = None, exclude_chars: str =
         yield code[:i] + code[i+1:]
 
 
+def nuke_range_char_gen(code):
+    # O(n**2)
+    for a in range(len(code)):
+        for b in range(a+1,len(code)):
+            yield code[:a] + code[b:]
+
+
 def sub_char_gen(code, charset=None, exclude_indicies: list[int] = None, exclude_chars: str = None):
     # O(m*n)
     if exclude_indicies is None:
@@ -107,14 +114,24 @@ def sub_char_gen(code, charset=None, exclude_indicies: list[int] = None, exclude
 # todo nuke range char gen which is O(n**2)
 
 
+# tried so far (10/12/2025):
+# nuke 1x
+# nuke 2x
+# nuke 1x sub 1x
+# nuke range
+
+
+TIMEOUT = 4.0
+
+
+# modify this function to do stuff
 def charbrute(task_num, code):
     import warnings
     warnings.filterwarnings("ignore")
 
-    for n1 in nuke_char_gen(code):
-        for n2 in sub_char_gen(n1):
-            if test_code(task_num, n2) == TestCodeStatus.SUCCESS:
-                print(task_num, n2)
+    for final in nuke_range_char_gen(code):
+        if test_code(task_num, final) == TestCodeStatus.SUCCESS:
+            print(f"new best on t{task_num} ({len(code)} -> {len(final)}): {final}")
 
 
 def main():
@@ -173,14 +190,14 @@ def main():
     for task_num in task_filtered:
         code = autogolf.autogolf(task_contents[task_num].decode('l1'))
 
-        print(f"cb {task_num}")
+        print(f"v charbruting {task_num} ...")
 
         t = multiprocessing.Process(target=charbrute, args=(task_num, code))
         t.start()
-        t.join(timeout=4.0)  # listening to the jeopardy theme song waiting for ts to finish rn
+        t.join(timeout=TIMEOUT)  # listening to the jeopardy theme song waiting for ts to finish rn
         t.terminate()  # send kill signal or something
         t.join()  # wait for it to die
-        print(task_num)
+        print(f"^ done charbruting {task_num}\n")
 
 
 if __name__ == '__main__':
