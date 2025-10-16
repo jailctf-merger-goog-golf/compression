@@ -241,9 +241,9 @@ def combined_mutation_gen(code: str, s_k: int = 1, d_k: int = 1, n: int = 10, ch
         if s_k + d_k > 0 and s_k + d_k <= len(valid_indices):
             s_k_temp = s_k
             d_k_temp = d_k
-            if random.getrandbits(3) < 2:
+            if random.getrandbits(3) < 2:  # 2/8
                 d_k_temp = random.randint(1, d_k - 1)
-            if random.getrandbits(3) < 1:
+            if random.getrandbits(3) < 1:  # 1/8
                 s_k_temp = random.randint(1, s_k - 1)
             affected_indices = random.sample(valid_indices, s_k_temp + d_k_temp)
             del_indices = random.sample(affected_indices, d_k_temp)
@@ -305,6 +305,13 @@ def combined_mutation_gen(code: str, s_k: int = 1, d_k: int = 1, n: int = 10, ch
 
 
 TIMEOUT = 20.0
+global_charset = set("0123456789*+^><~-.,%/|& ")
+
+blacklist = {r"""p=lambda g,k=9:(r:=[*{x for x in sum(zip(*g),())if sum(g,g).count(x)==k}])and[r]*k or p(g,k-1)""",
+             r"""p=lambda g,i=47:-i*eval(f'[[{g[0]}[g<1]'+"for g in g][1:i]"*2)or p([*zip(*g[any(g[-1])-2::-1])],i-1)""",
+             r"""def p(g):R=range(l:=len(B:=eval("[[8,*r,8]for r in zip(*"*2+"g"+")if 8in r]"*2)));return[[B[i][j]*[[*{c/8for c in sum(g,[])if c%8}][(i>j)+(~i+l<j)*2],0<i<l-1][i in(j,~j+l)]for j in R]for i in R]""",
+             r"""p=lambda g,*x:[*{i for i in zip(*x or p(*g))if any(i)}]""",
+             }
 
 
 # modify this function to do stuff
@@ -314,16 +321,17 @@ def charbrute(task_num, code):
 
     for final in combined_mutation_gen(code, 3, 2, 0):
         if test_code(task_num, final) == TestCodeStatus.SUCCESS:
-            print(f"hit on t{task_num:03d} ({len(code)} -> {len(final)}): {final}" + "!"*100)
-            with open('brute.txt', 'a') as f:
-                f.write(f"new best on t{task_num:03d} ({len(code)} -> {len(final)}): {final}\n")
+            if final not in blacklist and (task_num % 1000 != 238 or ":0for" in final):
+                print(f"hit on t{task_num:03d} ({len(code)} -> {len(final)}): {final}" + "!"*100)
+                with open('brute.txt', 'a') as f:
+                    f.write(f"new best on t{task_num:03d} ({len(code)} -> {len(final)}): {final}\n")
 
 
 def main():
     import warnings
     warnings.filterwarnings("ignore")
 
-    TEST_EXPORT_DIR_PATH = r"C:\Users\quasar\Downloads\export-1760312562"
+    TEST_EXPORT_DIR_PATH = r"C:\Users\quasar\Downloads\export-1760427247"
     while not os.path.isdir(TEST_EXPORT_DIR_PATH):
         print("Export dir path not found. Enter > ", end="")
         TEST_EXPORT_DIR_PATH = input()
