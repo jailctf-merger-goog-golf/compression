@@ -45,6 +45,9 @@ class ColonStmtDetector(NodeVisitor):
     def visit_FunctionDef(self, node: FunctionDef):
         self.has_semicolons = True
 
+    def visit_Try(self, node):
+        self.has_semicolons = True
+
 
 # noinspection PyUnresolvedReferences,PyProtectedMember
 simple_enum, IntEnum, auto = enum._simple_enum, enum.IntEnum, enum.auto
@@ -463,19 +466,32 @@ class _Unparser(NodeVisitor):
             self.traverse(node.cause)
 
     def do_visit_try(self, node):
+        # awef
         self.fill("try")
+        can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
+        self.semicoloning = not can_semicoloning
+        self.semicoloning_skip_first = True
         with self.block():
             self.traverse(node.body)
+        self.semicoloning = False
         for ex in node.handlers:
             self.traverse(ex)
         if node.orelse:
             self.fill("else")
+            can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
+            self.semicoloning = not can_semicoloning
+            self.semicoloning_skip_first = True
             with self.block():
                 self.traverse(node.orelse)
+            self.semicoloning = False
         if node.finalbody:
             self.fill("finally")
+            can_semicoloning = ColonStmtDetector().uses_colon_stmts(node.body)
+            self.semicoloning = not can_semicoloning
+            self.semicoloning_skip_first = True
             with self.block():
                 self.traverse(node.finalbody)
+            self.semicoloning = False
 
     def visit_Try(self, node):
         prev_in_try_star = self._in_try_star
@@ -1458,7 +1474,7 @@ def main():
 
     warnings.filterwarnings("ignore")
 
-    TEST_EXPORT_DIR_PATH = r"C:\Users\quasar\Downloads\export-1760312562"
+    TEST_EXPORT_DIR_PATH = r"C:\Users\quasar\Downloads\export-1760593756"
     while not os.path.isdir(TEST_EXPORT_DIR_PATH):
         print("Export dir path not found. Enter > ", end="")
         TEST_EXPORT_DIR_PATH = input()
