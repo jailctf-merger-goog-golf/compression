@@ -30,7 +30,6 @@ SKIP_FIELD_NODES_COMBOS = {
 
 @lru_cache
 def test_code(task_num, code, return_on_first_fail=True) -> TestCodeStatus:
-    # if "import zlib" in code: return TestCodeStatus.ERROR_UNRECOVERABLE
     task_num = task_num % 1000
     if task_num not in jsonfile_cache:
         jsonfile = join(dirname(dirname(__file__)), "infos", f"task{task_num:03d}.json")
@@ -84,31 +83,43 @@ def combined_mutation_gen(code: str, s_k: int = 1, d_k: int = 1, n: int = 10, ch
     if charset is None:
         charset = code + code[6:]*4 + global_charnotset*3
     
+    valid_indices = [i for i, char in enumerate(code) if i not in exclude_indices_set]
+    lc = len(valid_indices)
+
+    center_pcache = {}
+    for i in range(lc):
+        center_pcache[i] = [1/pow(abs(x-i)+1,1.5) for x in range(lc)]
+
     while True:
-        valid_indices = [i for i, char in enumerate(code) if i not in exclude_indices_set]
-        
         mutated_code = code
-        if 0 < s_k + d_k <= len(valid_indices):
+
+        if 0 < s_k + d_k <= lc:
             s_k_temp = s_k
             d_k_temp = d_k
-            if random.getrandbits(3) < 2:
+            if random.getrandbits(3) < 6:
                 d_k_temp = random.randint(1, d_k - 1)
-            if random.getrandbits(3) < 5:
+            if random.getrandbits(3) < 6:
                 s_k_temp = random.randint(1, s_k - 1)
-            affected_indices = random.sample(valid_indices, s_k_temp + d_k_temp)
-            del_indices = random.sample(affected_indices, d_k_temp)
+            
+            center = random.randint(5, lc-3)
+            affected_indices = []
+            while len(affected_indices) < s_k_temp+d_k_temp:
+                v = random.choices(valid_indices, center_pcache[center], k=1)[0]
+                if v not in affected_indices:
+                    affected_indices.append(v)
+
+            del_indices = affected_indices[:d_k_temp]
             
             sub_map = {}
-            for index in affected_indices:
-                if index not in del_indices:
-                    sub_map[index] = random.choice(charset)
+            for index in affected_indices[d_k_temp:]:
+                sub_map[index] = random.choice(charset)
 
             new_code_list = []
             for i, char in enumerate(code):
                 if i in del_indices:
                     continue
                 elif i in sub_map:
-                    if random.randint(0, 7) == 0: # do an insertion instead of a substitution sometimes
+                    if random.randint(0, 7) < 4: # do an insertion instead of a substitution sometimes
                         new_code_list.append(char)
                     new_code_list.append(sub_map[i])
                 else:
@@ -120,7 +131,7 @@ def combined_mutation_gen(code: str, s_k: int = 1, d_k: int = 1, n: int = 10, ch
         if len(final_code) >= len(code):
             continue
 
-        if random.getrandbits(3) < 4:
+        if random.getrandbits(3) < 2:
             n = random.randint(1, 3)
         else:
             n = 0
@@ -133,7 +144,7 @@ def combined_mutation_gen(code: str, s_k: int = 1, d_k: int = 1, n: int = 10, ch
                 if len(final_code) > min_move_index:
                     start = random.randint(min_move_index, len(final_code) - 1)
                     length = 1 # length = random.randint(1, n)
-                    if random.getrandbits(3) < 2:
+                    if random.getrandbits(3) < 3:
                         length = random.randint(1, 10)
                     end = min(start + length, len(final_code))
                     chunk = final_code[start:end]
@@ -146,10 +157,10 @@ def combined_mutation_gen(code: str, s_k: int = 1, d_k: int = 1, n: int = 10, ch
 
         try:
             parse(final_code)
-            # assert final_code != code
             yield final_code
         except:
             continue
+
 
 # todo swap char gen which is O(n**2)
 # todo nuke range char gen which is O(n**2)
@@ -167,48 +178,18 @@ global_charset = set("0123456789*+^><~-.,%/|& ")
 global_charnotset = "".join(global_charset) + "   "
 
 blacklist = {r"""p=lambda g,k=9:(r:=[*{x for x in sum(zip(*g),())if sum(g,g).count(x)==k}])and[r]*k or p(g,k-1)""",
-             r"""p=lambda g,i=47:-i*eval(f'[[{g[0]}[g<1]'+"for g in g][1:i]"*2)or p([*zip(*g[any(g[-1])-2::-1])],i-1)""",
              r"""def p(g):R=range(l:=len(B:=eval("[[8,*r,8]for r in zip(*"*2+"g"+")if 8in r]"*2)));return[[B[i][j]*[[*{c/8for c in sum(g,[])if c%8}][(i>j)+(~i+l<j)*2],0<i<l-1][i in(j,~j+l)]for j in R]for i in R]""",
              r"""p=lambda g,*x:[*{i for i in zip(*x or p(*g))if any(i)}]""",
             }
-
-
-# # modify this function to do stuff
-# def charbrute(task_num, code):
-#     import warnings
-#     warnings.filterwarnings("ignore")
-
-#     for final in combined_mutation_gen(code, 5, 2, 0):
-#         if test_code(task_num, final) == TestCodeStatus.SUCCESS:
-#             if final not in blacklist and (task_num % 1000 != 238 or ":0for" in final):
-#                 print(f"hit on t{task_num:03d} ({len(code)} -> {len(final)}): {final}" + "!"*100)
-#                 with open('brute.txt', 'a') as f:
-#                     f.write(f"new best on t{task_num:03d} ({len(code)} -> {len(final)}): {final}\n")
 
 # modify this function to do stuff
 def charbrute(task_num, code):
     import warnings
     warnings.filterwarnings("ignore")
 
-    # --- New code for handling same-length solutions ---
-    same_length_dir = os.path.join('./', "alt_sols")
-    os.makedirs(same_length_dir, exist_ok=True)
-    
-    # Correctly reconstruct the filename including version prefixes
-    num = task_num % 1000
-    filename = f"task{num:03d}.py"
-    task_file_path = os.path.join(same_length_dir, filename)
-
-    existing_sols = {code}
-    if os.path.exists(task_file_path):
-        with open(task_file_path, 'r') as f:
-            content = f.read()
-            # Split by double newline and filter out empty strings
-            existing_sols.update(sol for sol in content.split('\n\n') if sol)
-
     original_len = len(code)
 
-    for final in combined_mutation_gen(code, 5, 2, 0):
+    for final in combined_mutation_gen(code, 4, 3, 0):
         if test_code(task_num, final) == TestCodeStatus.SUCCESS:
             try:
                 final = autogolf.autogolf(final)
@@ -220,15 +201,12 @@ def charbrute(task_num, code):
                 golfed_len = len(final)
 
                 if golfed_len < original_len:
+                    with open('brute.txt', 'r') as f:
+                        if final in f.read(): continue
                     print(f"hit on t{task_num:03d} ({original_len} -> {golfed_len}): {final}" + "!"*100)
                     with open('brute.txt', 'a') as f:
                         f.write(f"new best on t{task_num:03d} ({original_len} -> {golfed_len}): {final}\n")
-                
-                elif golfed_len == original_len:
-                    if final not in existing_sols:
-                        with open(task_file_path, 'a') as f:
-                            f.write(final + '\n\n')
-                        existing_sols.add(final)
+
 
 def main():
     import warnings
@@ -251,13 +229,12 @@ def main():
             continue
         n = int(os.path.basename(task_path).removesuffix('.py').removeprefix('task').lstrip('v'), 10)
         n += task_path.count('v') * 1000
-        # if n not in [102]: continue
         with open(task_path, 'rb') as f:
             data = f.read()
             if len(data) == 0: continue
             if b'p(g*2)' in data and not DO_GX2_SOLS: continue
             if data.startswith(b"#coding:l1"):
-                new = data.decode('l1').removeprefix('#coding:l1\nimport zlib\nexec(zlib.decompress(bytes(')
+                new = data.decode('l1').removeprefix('#coding:l1\nimport zlib\nexec(zlib.decompress(bytes(').removeprefix('#coding:l1\nimport zlib,re\nexec(zlib.decompress(bytes(')
                 new = new.removesuffix(",'l1'),-9))")[1:-1].replace('\\\\', '\\\\').replace("\\0", '\x00').replace("\\n", '\x0a').replace("\\r", '\x0d').replace("\\'", "'").replace('\\"', '"')
                 decompressed = zlib.decompress(new.encode('l1'), -9)
                 try:
@@ -270,9 +247,20 @@ def main():
     print("All sols loaded.")
     task_filtered = {tn: task_contents[tn] for tn in task_contents if DO_COMPRESSED_SOLS or (not task_compressed[tn])}
 
-    # task_filtered = {}
+    task_filtered = {}
+    
+    base = 305
+    
+    task_filtered[base] = rb"""p=lambda g,x=2:g*0!=0and[p(r,x:=x-1)or-x%max(g)+1for r in g]"""
 
-    # task_filtered[81] = rb"""p=lambda g,i=3:g*-i or p([(q:=1)*[q:=r.pop()or[9-q]<r[-1:]for r in g]for*r,in g],i-1)"""
+#     sols = rb"""p=lambda g:g and[x:=[3]*len(g),g[2:]and[*g[0][1:],3]or x,*zip(*p([*zip(*g[2:])])[::-1])]
+# p=lambda g:g and[x:=[3]*len(g),g[2:]and[*g[2][1:],3]or x,*zip(*p([*zip(*g[2:])])[::-1])]
+# p=lambda g:g and[x:=[3]*len(g),x[2:]and[*g[0][1:],3]or x,*zip(*p([*zip(*g[2:])])[::-1])]
+# p=lambda g:g and[[3]*len(g),g[2:]and[*g[0][1:],3]or[3,3],*zip(*p([*zip(*g[2:])])[::-1])]
+# """.strip().splitlines()
+
+    # for i,sol in enumerate(sols):
+    #     task_filtered[base + i*1000] = sol
 
     tasks_to_run = []
     for task_num in task_filtered:
@@ -288,8 +276,8 @@ def main():
     
     print(f"Starting parallel brute-force on {len(tasks_to_run)} tasks...")
 
-    # max_processes = 4
-    max_processes = os.cpu_count() - 1 or 1
+    max_processes = 8
+    # max_processes = os.cpu_count() - 1 or 1
     running_procs = {}
 
     while tasks_to_run or running_procs:
